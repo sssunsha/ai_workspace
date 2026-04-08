@@ -1,6 +1,6 @@
 # AI Workspace
 
-个人 AI 学习与实验工作空间，包含 Claude Code 使用手册和 8 种 Agent 架构脚手架项目。
+个人 AI 学习与实验工作空间，包含 Claude Code 使用手册、8 种 Agent 架构脚手架和生产级 RAG 完整脚手架。
 
 ---
 
@@ -19,8 +19,11 @@
   - [3.7 06-tool-use-agent](#37-06-tool-use-agent)
   - [3.8 07-judge-critic-agent](#38-07-judge-critic-agent)
   - [3.9 08-memory-agent](#39-08-memory-agent)
-- [4. 快速开始](#4-快速开始)
-- [5. 技术栈](#5-技术栈)
+- [4. rag-start — RAG 完整脚手架](#4-rag-start--rag-完整脚手架)
+  - [4.1 项目总览](#41-项目总览)
+  - [4.2 核心模块文件](#42-核心模块文件)
+- [5. 快速开始](#5-快速开始-1)
+- [6. 技术栈](#6-技术栈)
 
 ---
 
@@ -30,16 +33,35 @@
 ai_workspace/
 ├── ReadMe.md                          # 本文件：工程总览与目录索引
 ├── claude-code-手册.md                 # Claude Code CLI 完整使用手册
-└── agent-start/                       # 8 种 Agent 架构 TypeScript 脚手架
-    ├── README.md                      # 合集总览与架构速查表
-    ├── 01-react-agent/                # ReAct：推理+行动循环
-    ├── 02-plan-execute-agent/         # Plan-and-Execute：计划分解与并行执行
-    ├── 03-multi-agent/                # Multi-Agent：多智能体指挥官模式
-    ├── 04-reflexion-agent/            # Reflexion：自我反思与迭代改进
-    ├── 05-rag-agent/                  # RAG：检索增强生成
-    ├── 06-tool-use-agent/             # Tool-Use：工具调用与函数执行
-    ├── 07-judge-critic-agent/         # Judge/Critic：LLM 评判者
-    └── 08-memory-agent/               # Memory-Augmented：记忆增强
+│
+├── agent-start/                       # 8 种 Agent 架构 TypeScript 脚手架
+│   ├── README.md                      # 合集总览与架构速查表
+│   ├── 01-react-agent/                # ReAct：推理+行动循环
+│   ├── 02-plan-execute-agent/         # Plan-and-Execute：计划分解与并行执行
+│   ├── 03-multi-agent/                # Multi-Agent：多智能体指挥官模式
+│   ├── 04-reflexion-agent/            # Reflexion：自我反思与迭代改进
+│   ├── 05-rag-agent/                  # RAG：检索增强生成（简版）
+│   ├── 06-tool-use-agent/             # Tool-Use：工具调用与函数执行
+│   ├── 07-judge-critic-agent/         # Judge/Critic：LLM 评判者
+│   └── 08-memory-agent/               # Memory-Augmented：记忆增强
+│
+└── rag-start/                         # 生产级 RAG 完整脚手架
+    ├── README.md                      # 架构文档（含替换指南）
+    ├── .env.example                   # 环境变量模板
+    ├── data/
+    │   └── knowledge-base.ts          # 示例知识库（5 篇文档）
+    └── src/
+        ├── index.ts                   # 入口：完整管道演示
+        ├── types.ts                   # 统一类型定义
+        ├── ingestion/
+        │   └── chunker.ts             # 文档分块（固定大小+重叠）
+        ├── embedding/
+        │   └── embedder.ts            # 向量化（模拟，含真实替换指南）
+        ├── retrieval/
+        │   ├── vectorStore.ts         # 内存向量库（余弦相似度）
+        │   └── retriever.ts           # 检索器 + LLM 重排序
+        └── generation/
+            └── generator.ts           # 答案生成（带来源引用）
 ```
 
 ---
@@ -199,28 +221,63 @@ Claude Code CLI 的完整中文参考手册（2026 年 3 月版），适用于 V
 
 ---
 
-## 4. 快速开始
+## 4. rag-start — RAG 完整脚手架
 
-所有 Agent 脚手架运行方式相同：
+**路径：** [rag-start/](rag-start/)
+
+生产级 RAG 完整管道实现，涵盖文档摄入→分块→向量化→检索→重排序→生成的全流程，每个组件均预留生产化替换接口。
+
+### 4.1 项目总览
+
+| 文件 | 说明 |
+|------|------|
+| [README.md](rag-start/README.md) | 完整架构文档：管道图、两大阶段说明、生产化替换指南、高级扩展方向、参考资料 |
+| [.env.example](rag-start/.env.example) | 环境变量模板，含 Voyage/Cohere/OpenAI/Pinecone 可选配置 |
+
+**RAG 管道架构**：
+```
+离线索引：文档 → [分块] → [向量化] → [向量库]
+在线查询：问题 → [向量化] → [相似度检索] → [LLM重排序] → [生成答案+引用]
+```
+
+### 4.2 核心模块文件
+
+| 文件路径 | 模块职责 |
+|---------|---------|
+| [src/types.ts](rag-start/src/types.ts) | 统一类型：`RawDocument` / `Chunk` / `EmbeddedChunk` / `SearchResult` / `RAGResult` / 配置类型 |
+| [data/knowledge-base.ts](rag-start/data/knowledge-base.ts) | 示例知识库（5 篇文档：RAG 概述、向量库选型、分块策略、嵌入模型、高级技术） |
+| [src/ingestion/chunker.ts](rag-start/src/ingestion/chunker.ts) | 固定大小分块（chunkSize=300, overlap=50），可替换为语义分块 |
+| [src/embedding/embedder.ts](rag-start/src/embedding/embedder.ts) | 模拟向量化（含 Voyage AI / OpenAI / Cohere / Ollama 替换示例） |
+| [src/retrieval/vectorStore.ts](rag-start/src/retrieval/vectorStore.ts) | 内存向量库，余弦相似度检索，支持 upsert / delete，可替换为 Pinecone / Qdrant / pgvector |
+| [src/retrieval/retriever.ts](rag-start/src/retrieval/retriever.ts) | 两步检索：向量粗排（topK=6）+ LLM 精排序（rerankTopK=3），可替换为 Cohere Rerank |
+| [src/generation/generator.ts](rag-start/src/generation/generator.ts) | 答案生成，强制来源引用标注【来源X】，拒绝无据幻觉 |
+| [src/index.ts](rag-start/src/index.ts) | 入口：完整三阶段管道演示（摄入→索引→4组问答） |
+
+---
+
+## 5. 快速开始
+
+**agent-start 任意脚手架：**
 
 ```bash
-# 1. 进入任意子项目
 cd agent-start/01-react-agent
-
-# 2. 安装依赖
 npm install
+cp .env.example .env   # 填入 ANTHROPIC_API_KEY
+npm run dev
+```
 
-# 3. 配置 API Key
-cp .env.example .env
-# 编辑 .env，填入：ANTHROPIC_API_KEY=sk-ant-...
+**rag-start 完整 RAG 管道：**
 
-# 4. 运行
+```bash
+cd rag-start
+npm install
+cp .env.example .env   # 填入 ANTHROPIC_API_KEY
 npm run dev
 ```
 
 ---
 
-## 5. 技术栈
+## 6. 技术栈
 
 | 技术 | 版本 | 用途 |
 |------|------|------|
