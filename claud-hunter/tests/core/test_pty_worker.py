@@ -22,52 +22,37 @@ def test_strip_ansi_handles_empty_string():
     assert strip_ansi("") == ""
 
 
-def test_pty_worker_spawns_and_reads_echo():
-    """基础集成测试：PtyWorker 可以启动 echo 并读取输出。"""
-    import os
-    import pty
-    import re
-    import subprocess
-    ansi_escape = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
-    master_fd, slave_fd = pty.openpty()
-    proc = subprocess.Popen(
-        ["echo", "hello pty"],
-        stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
-        close_fds=True, env=os.environ.copy(),
-    )
-    os.close(slave_fd)
-    output = b""
-    try:
-        while True:
-            try:
-                chunk = os.read(master_fd, 1024)
-                if not chunk:
-                    break
-                output += chunk
-            except OSError:
-                break
-    finally:
-        os.close(master_fd)
-        proc.wait()
-    text = ansi_escape.sub('', output.decode('utf-8', errors='replace'))
-    assert "hello pty" in text
+import pytest
+from PyQt6.QtCore import QCoreApplication
+from PyQt6.QtWidgets import QApplication
+from app.core.pty_worker import PtyWorker
 
 
-def test_pty_worker_filenotfound_raises():
-    """启动不存在的命令应抛出 FileNotFoundError。"""
-    import os
-    import pty
-    import subprocess
-    master_fd, slave_fd = pty.openpty()
-    try:
-        subprocess.Popen(
-            ["__nonexistent_cmd_xyz__"],
-            stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
-            close_fds=True, env=os.environ.copy(),
-        )
-    except FileNotFoundError:
-        return
-    finally:
-        os.close(slave_fd)
-        os.close(master_fd)
-    pytest.fail("Expected FileNotFoundError for nonexistent command")
+@pytest.fixture(scope="module")
+def qt_app():
+    app = QApplication.instance() or QApplication([])
+    yield app
+
+
+def test_pty_worker_emits_output(qt_app):
+    received = []
+    worker = PtyWorker(cli_cmd="echo", cli_args=["hello pty"])
+    worker.output_received.connect(lambda t: received.append(t))
+    worker.start()
+    worker.wait(3000)
+    QCoreApplication.processEvents()
+
+    combined = "".join(received)
+    assert "hello pty" in combined
+
+
+def test_pty_worker_emits_error_for_bad_command(qt_app):
+    errors = []
+    worker = PtyWorker(cli_cmd="__nonexistent_cmd_xyz__")
+    worker.process_error.connect(lambda e: errors.append(e))
+    worker.start()
+    worker.wait(3000)
+    QCoreApplication.processEvents()
+
+    assert len(errors) >= 1
+    assert "__nonexistent_cmd_xyz__" in errors[0]
