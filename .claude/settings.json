@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p /Users/I340818/.claude/skills/maozedong-perspective/scripts)",
+      "Bash(mkdir -p /Users/I340818/.claude/skills/maozedong-perspective/references/research)",
+      "Bash(mkdir -p /Users/I340818/.claude/skills/maozedong-perspective/references/sources/books)",
+      "Bash(mkdir -p /Users/I340818/.claude/skills/maozedong-perspective/references/sources/transcripts)",
+      "Bash(mkdir -p /Users/I340818/.claude/skills/maozedong-perspective/references/sources/articles)",
+      "Edit(~/.claude/skills/maozedong-perspective/**)"
+    ]
+  }
+}
