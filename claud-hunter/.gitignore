@@ -1,0 +1,6 @@
+dist/
+build/
+*.spec.bak
+__pycache__/
+*.pyc
+.DS_Store
