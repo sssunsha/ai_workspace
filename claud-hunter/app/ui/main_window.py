@@ -58,6 +58,9 @@ class MainWindow(QMainWindow):
 
     def _restart_worker(self):
         if self._worker:
+            self._worker.output_received.disconnect()
+            self._worker.process_finished.disconnect()
+            self._worker.process_error.disconnect()
             self._worker.stop()
         self._chat.clear_output()
         self._start_worker()

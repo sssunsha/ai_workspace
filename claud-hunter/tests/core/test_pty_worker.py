@@ -22,7 +22,6 @@ def test_strip_ansi_handles_empty_string():
     assert strip_ansi("") == ""
 
 
-import pytest
 from PyQt6.QtCore import QCoreApplication
 from PyQt6.QtWidgets import QApplication
 from app.core.pty_worker import PtyWorker

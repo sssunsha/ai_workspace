@@ -35,7 +35,7 @@ class Sidebar(QWidget):
     task_send_requested = pyqtSignal(str)
     skill_fill_requested = pyqtSignal(str)
 
-    def __init__(self, skills: list, tasks: list, warnings: list, parent=None):
+    def __init__(self, skills: list[str], tasks: list[Task], warnings: list[str], parent=None):
         super().__init__(parent)
         self.setObjectName("sidebar")
         self.setFixedWidth(220)
