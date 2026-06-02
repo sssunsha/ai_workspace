@@ -138,11 +138,12 @@ class DuplicateModal(ModalScreen[str]):
     DuplicateModal Button { margin: 0 1; }
     """
 
-    def __init__(self, source: str, status: str, extracted_at: str) -> None:
+    def __init__(self, source: str, status: str, extracted_at: str, file_count: int = 0) -> None:
         super().__init__()
         self._source = source
         self._status = status
         self._extracted_at = extracted_at
+        self._file_count = file_count
 
     def compose(self) -> ComposeResult:
         status_text = {
@@ -150,15 +151,21 @@ class DuplicateModal(ModalScreen[str]):
             "needs_transcription": "⏳ 待转录",
             "failed": "✗ 失败",
         }.get(self._status, self._status)
+        # 若已抓文件数接近 limit（200），给出明确提示
+        count_hint = ""
+        if self._file_count > 0:
+            count_hint = f"  已抓：{self._file_count} 篇"
+            if self._file_count >= 190:
+                count_hint += "（上次可能到达页数上限，继续抓取可获取更多）"
         with Vertical():
             yield Label("来源已存在")
             yield Label(
                 f"[bold]{self._source[:60]}[/bold]\n"
-                f"状态：{status_text}  时间：{self._extracted_at[:10] or '未知'}"
+                f"状态：{status_text}  时间：{self._extracted_at[:10] or '未知'}{count_hint}"
             )
             with Horizontal():
-                if self._status == "needs_transcription":
-                    yield Button("继续抓取", id="btn-resume", variant="primary")
+                # 已完成但可能未抓完，或未完成状态，都显示「继续抓取」
+                yield Button("继续抓取", id="btn-resume", variant="primary")
                 yield Button("强制重新获取", id="btn-force", variant="warning")
                 yield Button("放弃", id="btn-cancel")
 
@@ -544,6 +551,17 @@ class TUIApp(App):
         bar.progress = 0
         bar.add_class("active")
 
+    def _count_files_for(self, source: str) -> int:
+        """统计与某个来源对应的 raw 目录下已有文件数。"""
+        try:
+            from ..extractors.web import _url_to_subfolder
+            subfolder = Path("./raw") / _url_to_subfolder(source)
+            if subfolder.is_dir():
+                return len(list(subfolder.glob("*.md")))
+        except Exception:
+            pass
+        return 0
+
     def _hide_progress_bar(self) -> None:
         """隐藏进度条。"""
         self.query_one(f"#{self._PROGRESS_BAR_ID}", ProgressBar).remove_class("active")
@@ -565,11 +583,14 @@ class TUIApp(App):
                         self._start_extract(event, force=True)
                     # btn-cancel 或关闭：什么都不做
 
+                # 统计已有文件数，用于弹窗显示进度提示
+                file_count = self._count_files_for(event.source)
                 self.push_screen(
                     DuplicateModal(
                         source=event.source,
                         status=existing.status,
                         extracted_at=existing.extracted_at,
+                        file_count=file_count,
                     ),
                     handle_choice,
                 )

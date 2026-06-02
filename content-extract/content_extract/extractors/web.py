@@ -128,8 +128,15 @@ class WebExtractor(BaseExtractor):
                         seen.add(href)
                         queue.append(href)
 
-        self.log(f"整站爬取完成，共 {len(results)} 页 → {self.config.output_dir / _url_to_subfolder(site_url)}/")
         subfolder_dir = self.config.output_dir / _url_to_subfolder(site_url)
+        # 区分「到达上限」和「队列真正耗尽」两种结束原因
+        if queue:
+            self.log(
+                f"已到达页数上限（{limit}），本次写入 {len(results)} 页 → {subfolder_dir}/\n"
+                f"队列中还有约 {len(queue)} 个待处理 URL，可再次运行继续抓取（断点续传自动跳过已有页面）"
+            )
+        else:
+            self.log(f"整站爬取完成，共 {len(results)} 页 → {subfolder_dir}/（队列已全部处理）")
         return results[0] if results else subfolder_dir / "index.md"
 
     async def _process_url(
