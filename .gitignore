@@ -1,0 +1,58 @@
+# macOS 系统文件
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# 内容提取工具输出（体积大，可重新生成）
+raw/
+audio/
+audio_tmp/
+chroma-db/
+
+# Cookie 文件（含登录凭证，绝不推送远端）
+cookies*.txt
+bilibili_cookies.txt
+douyin_cookies.txt
+*.cookies.txt
+
+# 环境变量和密钥
+.env
+.env.*
+secrets.json
+file_ids.json
+
+# Python 构建产物
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# Node.js
+node_modules/
+package-lock.json
+npm-debug.log*
+
+# PyInstaller 打包产物
+*.spec.bak
+*.app
+
+# 编辑器和 IDE
+.idea/
+*.swp
+*.swo
+
+# 向量数据库（本地生成，体积大）
+chroma-db/
+*.sqlite
+*.db
