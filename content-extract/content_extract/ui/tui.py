@@ -31,13 +31,18 @@ from textual import work
 
 @dataclass
 class TaskEntry:
-    """内存中的单条任务状态，对应 registry 的一个 URL 条目。"""
-    source: str
+    """内存中的单条任务状态。
+
+    整站爬取聚合为一条（seed_url 是入口 URL，page_count 是已抓页数）。
+    单页提取则是一对一。
+    """
+    source: str        # 入口 URL 或本地路径（seed_url）
     source_type: str
-    status: str  # extracting / done / failed / needs_transcription
-    output_file: str = ""
+    status: str        # extracting / done / failed / needs_transcription
+    output_file: str = ""    # 整站时是子目录名；单页时是文件相对路径
     error: str = ""
     extracted_at: str = ""
+    page_count: int = 0      # 整站爬取已完成页数；0 表示单页或未知
 
 
 # 状态图标映射
@@ -381,7 +386,9 @@ class QueuePanel(Static):
             icon = _STATUS_ICONS.get(t.status, "?")
             source_short = t.source[-35:] if len(t.source) > 35 else t.source
             time_short = t.extracted_at[:10] if t.extracted_at else "—"
-            table.add_row(icon, t.source_type or "—", source_short, time_short)
+            # 整站任务显示"类型(页数)"，单页显示类型
+            type_str = f"{t.source_type}({t.page_count})" if t.page_count > 1 else (t.source_type or "—")
+            table.add_row(icon, type_str, source_short, time_short)
         self.query_one("#queue-summary", Label).update(self._build_summary(tasks))
 
     @staticmethod
@@ -506,27 +513,76 @@ class TUIApp(App):
             pass
 
     def _load_registry(self) -> None:
-        """从 ./raw/.processed.json 加载历史任务记录。"""
+        """从 ./raw/.processed.json 加载并聚合历史任务记录。
+
+        整站爬取（output_file 在子目录下）按子目录合并为一条；
+        单页提取保持一对一。
+        """
         registry_path = Path("./raw/.processed.json")
         if not registry_path.exists():
             return
         try:
             from ..registry import Registry
             reg = Registry(registry_path)
-            for status in ("done", "failed", "needs_transcription"):
-                for entry in reg.get_by_status(status):
-                    self._tasks.append(TaskEntry(
-                        source=entry["source"],
-                        source_type=_infer_type(entry.get("output_file", "")),
-                        status=status,
-                        output_file=entry.get("output_file", ""),
-                        error=entry.get("error", "") or "",
-                        extracted_at=entry.get("extracted_at", ""),
-                    ))
+            all_entries = [
+                e for status in ("done", "failed", "needs_transcription")
+                for e in reg.get_by_status(status)
+            ]
+            groups = self._group_entries(all_entries)
+            for g in groups.values():
+                self._tasks.append(self._build_task_entry(g))
             self._refresh_queue()
-            self.log_message(f"已加载 {len(self._tasks)} 条历史记录")
+            total_pages = sum(t.page_count for t in self._tasks)
+            self.log_message(f"已加载 {len(self._tasks)} 个任务（共 {total_pages} 页记录）")
         except Exception as e:
             self.log_message(f"[yellow]加载历史记录失败：{e}[/yellow]")
+
+    @staticmethod
+    def _group_entries(all_entries: list[dict]) -> dict[str, dict]:
+        """将 registry 条目按输出子目录聚合：整站同目录合并，单页各自一条。"""
+        groups: dict[str, dict] = {}
+        for entry in all_entries:
+            output_file = entry.get("output_file", "")
+            source = entry["source"]
+            parts = output_file.split("/") if output_file else []
+            if len(parts) >= 2:
+                subfolder = parts[0]
+                if subfolder not in groups:
+                    groups[subfolder] = {"subfolder": subfolder, "entries": []}
+                groups[subfolder]["entries"].append(entry)
+            else:
+                key = f"single::{source}"
+                groups[key] = {"subfolder": output_file, "entries": [entry]}
+        return groups
+
+    @staticmethod
+    def _build_task_entry(g: dict) -> "TaskEntry":
+        """从聚合分组构建单条 TaskEntry。"""
+        _priority = {"failed": 3, "needs_transcription": 2, "done": 1}
+        entries = g["entries"]
+        subfolder = g["subfolder"]
+        worst = max(entries, key=lambda e, p=_priority: p.get(e.get("status", "done"), 0))
+        latest = max(entries, key=lambda e: e.get("extracted_at", ""))
+        # 找出代表性 seed URL：与子目录名匹配度最高的（匹配片段最多），平局取最短
+        clean_parts = [p for p in subfolder.replace("__", "/").replace("-", ".").split("/") if p]
+        seed = min(
+            (e["source"] for e in entries),
+            key=lambda url, cp=clean_parts: (-sum(1 for p in cp if p in url), len(url)),
+        )
+        # 优先从 output_file 文件名前缀推断；整站多页任务（页数>1 且无明确前缀）判为 web
+        sample_file = Path(entries[0].get("output_file", "")).name
+        source_type = _infer_type(sample_file)
+        if source_type == "—":
+            source_type = "web" if len(entries) > 1 else detect_source_type(seed)
+        return TaskEntry(
+            source=seed,
+            source_type=source_type,
+            status=worst.get("status", "done"),
+            output_file=subfolder,
+            error=worst.get("error", "") or "",
+            extracted_at=latest.get("extracted_at", ""),
+            page_count=len(entries),
+        )
 
     def _refresh_queue(self) -> None:
         """刷新队列面板显示。"""
@@ -689,16 +745,20 @@ class TUIApp(App):
         self.push_screen(RecordActionModal(task), handle_action)
 
     def _clear_record(self, task: "TaskEntry") -> None:
-        """从内存列表和 registry 中删除指定记录。"""
+        """从内存列表和 registry 中删除指定任务的所有记录（按子目录批量清除）。"""
         try:
             from ..registry import Registry
             reg = Registry(Path("./raw/.processed.json"))
-            reg.remove(task.source)
+            if task.output_file:
+                count = reg.remove_by_output_prefix(task.output_file)
+                self.log_message(f"已清空 {count} 条记录：{task.output_file}")
+            else:
+                reg.remove(task.source)
+                self.log_message(f"已清空记录：{task.source}")
         except Exception as e:
             self.log_message(f"[yellow]清空 registry 记录失败：{e}[/yellow]")
         self._tasks = [t for t in self._tasks if t.source != task.source]
         self._refresh_queue()
-        self.log_message(f"已清空记录：{task.source}")
 
     def action_clear_log(self) -> None:
         """清空日志面板。"""

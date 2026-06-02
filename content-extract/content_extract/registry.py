@@ -31,6 +31,18 @@ class Registry:
         self._data.pop(source, None)
         self.save()
 
+    def remove_by_output_prefix(self, prefix: str) -> int:
+        """删除所有 output_file 以 prefix/ 开头的记录，返回删除数量。"""
+        to_remove = [
+            k for k, v in self._data.items()
+            if v.get("output_file", "").startswith(prefix + "/") or v.get("output_file", "") == prefix
+        ]
+        for k in to_remove:
+            del self._data[k]
+        if to_remove:
+            self.save()
+        return len(to_remove)
+
     def save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._path.write_text(json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")
