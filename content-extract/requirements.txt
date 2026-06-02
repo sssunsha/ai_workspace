@@ -1,0 +1,28 @@
+# core
+click>=8.1
+toml>=0.10
+
+# web
+crawl4ai
+
+# video
+yt-dlp
+
+# transcription
+faster-whisper
+
+# dev/test
+pytest>=7.0
+
+# ebook（Phase 2，占位）
+# ebooklib
+# beautifulsoup4
+# pymupdf4llm
+
+# rag（Phase 4，占位）
+# chromadb
+# sentence-transformers
+
+# ui
+textual>=0.61.0
+# streamlit（Phase 4，占位）

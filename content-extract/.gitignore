@@ -1,0 +1,30 @@
+# Cookie 文件（含登录凭证）
+cookies*.txt
+bilibili_cookies.txt
+douyin_cookies.txt
+*.cookies.txt
+
+# 原始内容（体积大，可重新生成）
+raw/
+audio/
+audio_tmp/
+chroma-db/
+
+# 环境变量
+.env
+secrets.json
+file_ids.json
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/

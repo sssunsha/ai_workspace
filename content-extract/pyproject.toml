@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "content-extract"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.1",
+    "toml>=0.10",
+]
+
+[project.optional-dependencies]
+# Phase 1 核心提取器依赖（按需安装）
+web = ["crawl4ai"]
+video = ["yt-dlp", "faster-whisper"]
+all = ["crawl4ai", "yt-dlp", "faster-whisper"]
+dev = ["pytest>=7.0"]
+# TUI 界面
+ui = ["textual>=0.61.0"]
+
+[project.scripts]
+content-extract = "content_extract.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["content_extract*"]
