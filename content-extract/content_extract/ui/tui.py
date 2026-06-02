@@ -96,12 +96,13 @@ def detect_source_type(source: str) -> str:
 
 class ExtractRequested(Message):
     """用户点击「提取」按钮时发出。"""
-    def __init__(self, source: str, source_type: str, update_wiki: bool = False, crawl: bool = False) -> None:
+    def __init__(self, source: str, source_type: str, update_wiki: bool = False, crawl: bool = False, force: bool = False) -> None:
         super().__init__()
         self.source = source
         self.source_type = source_type
         self.update_wiki = update_wiki
         self.crawl = crawl
+        self.force = force
 
 
 class ExtractDone(Message):
@@ -114,7 +115,100 @@ class ExtractDone(Message):
         self.error = error
 
 
-# ── Wiki 占位弹窗 ─────────────────────────────────────────────────────────────
+# ── 重复来源确认弹窗 ──────────────────────────────────────────────────────────
+
+class DuplicateModal(ModalScreen[str]):
+    """检测到来源已存在时弹出，让用户选择操作。"""
+
+    DEFAULT_CSS = """
+    DuplicateModal { align: center middle; }
+    DuplicateModal > Vertical {
+        background: $surface;
+        border: thick $warning;
+        padding: 2 4;
+        width: 70;
+        height: auto;
+    }
+    DuplicateModal Label { margin-bottom: 1; }
+    DuplicateModal Horizontal {
+        height: auto;
+        align: center middle;
+        margin-top: 1;
+    }
+    DuplicateModal Button { margin: 0 1; }
+    """
+
+    def __init__(self, source: str, status: str, extracted_at: str) -> None:
+        super().__init__()
+        self._source = source
+        self._status = status
+        self._extracted_at = extracted_at
+
+    def compose(self) -> ComposeResult:
+        status_text = {
+            "done": "✓ 已完成",
+            "needs_transcription": "⏳ 待转录",
+            "failed": "✗ 失败",
+        }.get(self._status, self._status)
+        with Vertical():
+            yield Label("来源已存在")
+            yield Label(
+                f"[bold]{self._source[:60]}[/bold]\n"
+                f"状态：{status_text}  时间：{self._extracted_at[:10] or '未知'}"
+            )
+            with Horizontal():
+                if self._status == "needs_transcription":
+                    yield Button("继续抓取", id="btn-resume", variant="primary")
+                yield Button("强制重新获取", id="btn-force", variant="warning")
+                yield Button("放弃", id="btn-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id)
+
+
+# ── 记录操作弹窗 ──────────────────────────────────────────────────────────────
+
+class RecordActionModal(ModalScreen[str]):
+    """对已有记录执行操作：清空数据、继续抓取或强制更新。"""
+
+    DEFAULT_CSS = """
+    RecordActionModal { align: center middle; }
+    RecordActionModal > Vertical {
+        background: $surface;
+        border: thick $secondary;
+        padding: 2 4;
+        width: 70;
+        height: auto;
+    }
+    RecordActionModal Label { margin-bottom: 1; }
+    RecordActionModal Horizontal {
+        height: auto;
+        align: center middle;
+        margin-top: 1;
+    }
+    RecordActionModal Button { margin: 0 1; }
+    """
+
+    def __init__(self, task: "TaskEntry") -> None:
+        super().__init__()
+        self._task = task
+
+    def compose(self) -> ComposeResult:
+        t = self._task
+        with Vertical():
+            yield Label("记录操作")
+            yield Label(
+                f"[bold]{t.source[:60]}[/bold]\n"
+                f"类型：{t.source_type or '—'}  状态：{_STATUS_ICONS.get(t.status, '?')} {t.status}"
+            )
+            with Horizontal():
+                yield Button("继续抓取", id="btn-resume", variant="primary")
+                yield Button("强制更新", id="btn-force", variant="warning")
+                yield Button("清空记录", id="btn-clear", variant="error")
+                yield Button("取消", id="btn-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id)
 
 class WikiModal(ModalScreen):
     """Wiki 更新功能占位弹窗，Skill 实现后替换为实际逻辑。"""
@@ -341,6 +435,7 @@ class TUIApp(App):
     _PROGRESS_BAR_ID = "progress-bar"  # 进度条组件 ID 常量
     BINDINGS = [
         Binding("q", "quit", "退出", show=True),
+        Binding("a", "record_action", "记录操作", show=True),
         Binding("r", "retry_failed", "重试失败", show=True),
         Binding("c", "clear_log", "清空日志", show=True),
         Binding("o", "open_obsidian", "打开Obsidian", show=True),
@@ -454,20 +549,53 @@ class TUIApp(App):
         self.query_one(f"#{self._PROGRESS_BAR_ID}", ProgressBar).remove_class("active")
 
     def on_extract_requested(self, event: ExtractRequested) -> None:
-        """处理提取请求：追加任务到列表并启动 worker。"""
-        entry = TaskEntry(
-            source=event.source,
-            source_type=event.source_type,
-            status="extracting",
-        )
-        self._tasks.append(entry)
+        """处理提取请求：检查重复后决定是否直接开始或弹窗询问。"""
+        existing = next((t for t in self._tasks if t.source == event.source), None)
+
+        if existing and not event.force:
+            if existing.status in ("needs_transcription", "failed"):
+                # 未完成状态：直接继续，不需要弹窗
+                self._start_extract(event, force=False)
+            else:
+                # 已完成：弹窗询问用户
+                def handle_choice(choice: str | None) -> None:
+                    if choice == "btn-resume":
+                        self._start_extract(event, force=False)
+                    elif choice == "btn-force":
+                        self._start_extract(event, force=True)
+                    # btn-cancel 或关闭：什么都不做
+
+                self.push_screen(
+                    DuplicateModal(
+                        source=event.source,
+                        status=existing.status,
+                        extracted_at=existing.extracted_at,
+                    ),
+                    handle_choice,
+                )
+        else:
+            self._start_extract(event, force=event.force)
+
+    def _start_extract(self, event: ExtractRequested, force: bool) -> None:
+        """实际启动提取 worker，更新任务列表。"""
+        # 若已有记录，更新状态为 extracting；否则新建
+        existing = next((t for t in self._tasks if t.source == event.source), None)
+        if existing:
+            existing.status = "extracting"
+            existing.error = ""
+        else:
+            self._tasks.append(TaskEntry(
+                source=event.source,
+                source_type=event.source_type,
+                status="extracting",
+            ))
         self._refresh_queue()
         crawl_hint = "（整站）" if event.crawl else ""
-        self.log_message(f"开始提取 [{event.source_type}]{crawl_hint}: {event.source}")
-        # 整站 web 爬取时显示进度条，limit 默认 200
+        force_hint = "（强制）" if force else ""
+        self.log_message(f"开始提取 [{event.source_type}]{crawl_hint}{force_hint}: {event.source}")
         if event.crawl and event.source_type == "web":
             self._show_progress_bar(total=200)
-        self._run_extract(event.source, event.source_type, event.update_wiki, event.crawl)
+        self._run_extract(event.source, event.source_type, event.update_wiki, event.crawl, force)
 
     def on_extract_done(self, event: ExtractDone) -> None:
         """提取完成后更新内存状态并刷新队列。"""
@@ -485,19 +613,18 @@ class TUIApp(App):
             self.log_message(f"[red]✗ 失败：{event.error}[/red]")
 
     @work(thread=True)
-    def _run_extract(self, source: str, source_type: str, update_wiki: bool, crawl: bool = False) -> None:
+    def _run_extract(self, source: str, source_type: str, update_wiki: bool, crawl: bool = False, force: bool = False) -> None:
         """在独立线程执行提取，通过 call_from_thread 回调日志。"""
         def on_progress(msg: str) -> None:
             self.call_from_thread(self.log_message, msg)
 
         try:
             from ..extractors.base import ExtractConfig
-            cfg = ExtractConfig(output_dir=Path("./raw"), cookies=self._cookies)
+            cfg = ExtractConfig(output_dir=Path("./raw"), cookies=self._cookies, force=force)
 
             if source_type == "web":
                 from ..extractors.web import WebExtractor
                 extractor = WebExtractor(config=cfg, on_progress=on_progress)
-                # crawl=True 时触发整站 BFS 爬取，默认 limit=200
                 out = extractor.extract(source, crawl=crawl)
             elif source_type in ("video", "bilibili"):
                 from ..extractors import auto_detect_video
@@ -516,6 +643,41 @@ class TUIApp(App):
 
         except Exception as e:
             self.post_message(ExtractDone(source=source, success=False, error=str(e)))
+
+    def action_record_action(self) -> None:
+        """对队列表格中当前选中行的记录弹出操作菜单。"""
+        table = self.query_one("#queue-table", DataTable)
+        row_key = table.cursor_row
+        if row_key < 0 or row_key >= len(self._tasks):
+            self.log_message("[yellow]请先在队列中选中一行[/yellow]")
+            return
+        task = self._tasks[row_key]
+
+        def handle_action(choice: str | None) -> None:
+            if choice == "btn-clear":
+                self._clear_record(task)
+            elif choice == "btn-resume":
+                self.on_extract_requested(ExtractRequested(
+                    source=task.source, source_type=task.source_type, force=False
+                ))
+            elif choice == "btn-force":
+                self.on_extract_requested(ExtractRequested(
+                    source=task.source, source_type=task.source_type, force=True
+                ))
+
+        self.push_screen(RecordActionModal(task), handle_action)
+
+    def _clear_record(self, task: "TaskEntry") -> None:
+        """从内存列表和 registry 中删除指定记录。"""
+        try:
+            from ..registry import Registry
+            reg = Registry(Path("./raw/.processed.json"))
+            reg.remove(task.source)
+        except Exception as e:
+            self.log_message(f"[yellow]清空 registry 记录失败：{e}[/yellow]")
+        self._tasks = [t for t in self._tasks if t.source != task.source]
+        self._refresh_queue()
+        self.log_message(f"已清空记录：{task.source}")
 
     def action_clear_log(self) -> None:
         """清空日志面板。"""

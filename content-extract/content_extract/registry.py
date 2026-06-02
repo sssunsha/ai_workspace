@@ -26,6 +26,11 @@ class Registry:
     def get_by_status(self, status: str) -> list[dict]:
         return [{"source": k, **v} for k, v in self._data.items() if v.get("status") == status]
 
+    def remove(self, source: str) -> None:
+        """删除指定来源的记录并持久化。"""
+        self._data.pop(source, None)
+        self.save()
+
     def save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._path.write_text(json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")
