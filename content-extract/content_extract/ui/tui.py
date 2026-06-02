@@ -48,6 +48,29 @@ _STATUS_ICONS = {
     "needs_transcription": "⏳",
 }
 
+# 输出文件前缀 → 来源类型映射
+_PREFIX_TO_TYPE: dict[str, str] = {
+    "web__": "web",
+    "bili__": "video",
+    "dy__": "video",
+    "yt__": "video",
+    "epub__": "ebook",
+    "pdf__": "ebook",
+    "code__": "code",
+    "docs__": "docs",
+    "github__": "github",
+    "article__": "article",
+}
+
+
+def _infer_type(output_file: str) -> str:
+    """从输出文件路径的前缀推断来源类型。"""
+    name = Path(output_file).name if output_file else ""
+    for prefix, t in _PREFIX_TO_TYPE.items():
+        if name.startswith(prefix):
+            return t
+    return "—"
+
 
 # ── 类型自动识别 ──────────────────────────────────────────────────────────────
 
@@ -225,7 +248,7 @@ class AddSourcePanel(Static):
 # ── 处理队列面板 ──────────────────────────────────────────────────────────────
 
 class QueuePanel(Static):
-    """右侧队列面板：展示所有任务的状态。"""
+    """右侧队列面板：展示所有任务的状态和统计摘要。"""
 
     DEFAULT_CSS = """
     QueuePanel {
@@ -235,30 +258,51 @@ class QueuePanel(Static):
         padding: 1;
     }
     QueuePanel DataTable {
-        height: 12;
+        height: 10;
+    }
+    #queue-summary {
+        margin-top: 1;
+        color: $text-muted;
     }
     """
 
     def compose(self) -> ComposeResult:
         table = DataTable(id="queue-table", zebra_stripes=True)
-        table.add_columns("状态", "来源", "输出文件")
+        table.add_columns("状态", "类型", "来源", "时间")
         yield table
+        yield Label("", id="queue-summary")
 
     def refresh_table(self, tasks: list[TaskEntry]) -> None:
-        """清空并重绘队列表格。"""
+        """清空并重绘队列表格，同时更新底部统计摘要。"""
         table = self.query_one("#queue-table", DataTable)
         table.clear()
         for t in tasks:
             icon = _STATUS_ICONS.get(t.status, "?")
-            # 来源截断显示，避免过长
-            source_short = t.source[-40:] if len(t.source) > 40 else t.source
-            if t.output_file:
-                output_short = Path(t.output_file).name
-            elif t.error:
-                output_short = t.error[:30]
-            else:
-                output_short = "—"
-            table.add_row(icon, source_short, output_short)
+            source_short = t.source[-35:] if len(t.source) > 35 else t.source
+            time_short = t.extracted_at[:10] if t.extracted_at else "—"
+            table.add_row(icon, t.source_type or "—", source_short, time_short)
+        self.query_one("#queue-summary", Label).update(self._build_summary(tasks))
+
+    @staticmethod
+    def _build_summary(tasks: list[TaskEntry]) -> str:
+        """根据任务列表生成底部统计摘要文字。"""
+        if not tasks:
+            return "暂无记录"
+
+        counts = {"done": 0, "failed": 0, "needs_transcription": 0, "extracting": 0}
+        type_counts: dict[str, int] = {}
+        for t in tasks:
+            counts[t.status] = counts.get(t.status, 0) + 1
+            if t.source_type and t.source_type != "—":
+                type_counts[t.source_type] = type_counts.get(t.source_type, 0) + 1
+
+        icon_map = {"done": "✓", "extracting": "⟳", "needs_transcription": "⏳", "failed": "✗"}
+        parts = [f"共 {len(tasks)} 条"] + [
+            f"{icon_map[k]}{v}" for k, v in icon_map.items() if counts.get(k)
+        ]
+        status_str = "  ".join(parts)
+        type_str = "  ".join(f"{k}:{v}" for k, v in sorted(type_counts.items()))
+        return f"{status_str}\n{type_str}" if type_str else status_str
 
 
 # ── 实时日志面板 ──────────────────────────────────────────────────────────────
@@ -371,7 +415,7 @@ class TUIApp(App):
                 for entry in reg.get_by_status(status):
                     self._tasks.append(TaskEntry(
                         source=entry["source"],
-                        source_type="",
+                        source_type=_infer_type(entry.get("output_file", "")),
                         status=status,
                         output_file=entry.get("output_file", ""),
                         error=entry.get("error", "") or "",
