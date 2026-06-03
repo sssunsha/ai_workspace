@@ -59,10 +59,14 @@ class WebExtractor(BaseExtractor):
     def supported_domains(self) -> list[str]:
         return []
 
-    def extract(self, source: str, crawl: bool = False, limit: int = 200) -> Path:
+    def extract(self, source: str, crawl: bool = False, limit: int = 200,
+                limit_ref: list[int] | None = None) -> Path:
         """
-        crawl=False（默认）：单页提取，输出到 output_dir/{seed_subfolder}/index.md
-        crawl=True：整站 BFS 爬取，最多写入 limit 篇新页面
+        crawl=False（默认）：单页提取
+        crawl=True：整站 BFS 爬取
+
+        limit_ref：可选的可变 limit 容器，主线程可在 BFS 运行中修改 limit_ref[0] 实时生效。
+                   不传时自动创建 [limit]，CLI 调用保持兼容。
 
         Raises:
             ValueError: 入口 URL 包含不支持的语言（非 zh/en 系列）
@@ -81,7 +85,9 @@ class WebExtractor(BaseExtractor):
                 return output_dir / entry["output_file"]
 
         if crawl:
-            return asyncio.run(self._crawl_site(source, limit, reg, seed_lang))
+            # 使用传入的 limit_ref（TUI 实时控制），未传则创建新容器（CLI 兼容）
+            effective_limit_ref = limit_ref if limit_ref is not None else [limit]
+            return asyncio.run(self._crawl_site(source, effective_limit_ref, reg, seed_lang))
         return asyncio.run(self._crawl_single(source, reg))
 
     async def _crawl_single(self, url: str, reg: Registry) -> Path:
@@ -99,12 +105,13 @@ class WebExtractor(BaseExtractor):
         return out_path
 
     async def _crawl_site(
-        self, site_url: str, limit: int, reg: Registry, seed_lang: str
+        self, site_url: str, limit_ref: list[int], reg: Registry, seed_lang: str
     ) -> Path:
-        """整站爬取（BFS），最多写入 limit 篇新页面。
+        """整站爬取（BFS），最多写入 limit_ref[0] 篇新页面。
 
+        limit_ref 是可变容器，主线程可在 BFS 运行中修改 limit_ref[0] 实时生效。
         种子页面无论是否已处理都访问一次以获取内链；其他已处理页面直接跳过。
-        发现总数超过 limit 时通过 log 发送 __LIMIT_CHOICE__ 信号通知 TUI。
+        发现总数超过当前 limit 时通过 log 发送 __LIMIT_CHOICE__ 信号通知 TUI。
         """
         from crawl4ai import AsyncWebCrawler
         from collections import deque
@@ -116,7 +123,7 @@ class WebExtractor(BaseExtractor):
         seed_notified = False
 
         async with AsyncWebCrawler(verbose=False) as crawler:
-            while queue and len(results) < limit:
+            while queue and len(results) < limit_ref[0]:
                 url = queue.popleft()
                 is_seed = (url == site_url)
                 out_path, links = await self._process_url(
@@ -129,9 +136,9 @@ class WebExtractor(BaseExtractor):
                 self._enqueue_links(links, seen, queue, seed_netloc, seed_lang)
                 if is_seed and not seed_notified:
                     seed_notified = True
-                    self._notify_total(seen, reg, limit)
+                    self._notify_total(seen, reg, limit_ref)
 
-        return self._finish_crawl(site_url, limit, results, queue, reg)
+        return self._finish_crawl(site_url, limit_ref[0], results, queue, reg)
 
     def _enqueue_links(
         self, links: list[str], seen: set[str], queue,
@@ -143,12 +150,13 @@ class WebExtractor(BaseExtractor):
                 seen.add(href)
                 queue.append(href)
 
-    def _notify_total(self, seen: set[str], reg: Registry, limit: int) -> None:
-        """种子页面处理完后统计总数，若超过 limit 则发信号给 TUI 弹窗。"""
+    def _notify_total(self, seen: set[str], reg: Registry, limit_ref: list[int]) -> None:
+        """种子页面处理完后统计总数，若超过当前 limit 则发信号给 TUI 弹窗。"""
         total = len(seen)
         already = sum(1 for u in seen if reg.is_processed(u))
-        if total > limit:
-            self.log(f"__LIMIT_CHOICE__:{total}:{already}:{total - already}")
+        if total > limit_ref[0]:
+            # 格式：__LIMIT_CHOICE__:total:already:remaining:current_limit
+            self.log(f"__LIMIT_CHOICE__:{total}:{already}:{total - already}:{limit_ref[0]}")
 
     def _finish_crawl(
         self, site_url: str, limit: int, results: list[Path], queue, reg: Registry

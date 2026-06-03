@@ -759,6 +759,8 @@ class TUIApp(App):
         # 当前整站爬取的进度（已写入页数）
         self._crawl_progress: int = 0
         self._crawl_limit: int = 200
+        # 当前正在运行的 BFS limit 引用，修改 _active_limit_ref[0] 可实时改变上限
+        self._active_limit_ref: list[int] | None = None
         # 记录上次按 Esc 的时间（用于双击检测）
         self._last_esc_time: float = 0.0
 
@@ -870,24 +872,32 @@ class TUIApp(App):
             total_estimate=total_estimate,
         )
 
-    def _show_limit_choice(self, total: int, already: int, remaining: int) -> None:
-        """弹出总数确认弹窗，用户可选择一次全部抓取或沿用当前上限。"""
+    def _show_limit_choice(self, total: int, already: int, remaining: int, current_limit: int) -> None:
+        """弹出总数确认弹窗，用户可选择一次全部抓取或沿用当前上限。
+
+        用户确认后立即修改 _active_limit_ref[0]，BFS 循环下一次迭代即可感知新上限。
+        """
         def handle(new_limit: int | None) -> None:
             if not new_limit:
                 return
-            if new_limit != self._crawl_limit:
+            if new_limit != current_limit:
                 self._crawl_limit = new_limit
-                self.log_message(f"[cyan]已更新抓取上限为 {new_limit} 页，下次续抓时生效[/cyan]")
+                # 直接修改正在运行的 BFS limit 引用，当前任务立即生效
+                if self._active_limit_ref is not None:
+                    self._active_limit_ref[0] = new_limit
+                    self.log_message(f"[cyan]已将本次抓取上限扩展为 {new_limit} 页，继续抓取中…[/cyan]")
+                else:
+                    self.log_message(f"[cyan]已更新抓取上限为 {new_limit} 页[/cyan]")
                 self._show_progress_bar(total=new_limit)
             else:
-                self.log_message(f"[dim]沿用当前上限 {new_limit} 页[/dim]")
+                self.log_message(f"[dim]沿用当前上限 {current_limit} 页[/dim]")
 
         self.push_screen(
             LimitChoiceModal(
                 total=total,
                 already=already,
                 remaining=remaining,
-                current_limit=self._crawl_limit,
+                current_limit=current_limit,
             ),
             handle,
         )
@@ -902,10 +912,12 @@ class TUIApp(App):
         # 拦截 __LIMIT_CHOICE__ 信号：不写日志，改为弹窗
         if msg.startswith("__LIMIT_CHOICE__:"):
             parts = msg.split(":")
-            if len(parts) == 4:
-                total, already, remaining = int(parts[1]), int(parts[2]), int(parts[3])
-                # log_message 已在主线程，直接调用即可，不能再套 call_from_thread
-                self._show_limit_choice(total, already, remaining)
+            if len(parts) == 5:
+                total, already, remaining, current = (
+                    int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4])
+                )
+                # log_message 已在主线程，直接调用即可
+                self._show_limit_choice(total, already, remaining, current)
             return
 
         log_panel = self.query_one(LogPanel)
@@ -1024,7 +1036,16 @@ class TUIApp(App):
             if source_type == "web":
                 from ..extractors.web import WebExtractor
                 extractor = WebExtractor(config=cfg, on_progress=on_progress)
-                out = extractor.extract(source, crawl=crawl, limit=limit)
+                if crawl:
+                    # 创建可变 limit 引用，主线程修改 _active_limit_ref[0] 即可实时影响 BFS
+                    limit_ref: list[int] = [limit]
+                    self.call_from_thread(setattr, self, "_active_limit_ref", limit_ref)
+                    try:
+                        out = extractor.extract(source, crawl=True, limit_ref=limit_ref)
+                    finally:
+                        self.call_from_thread(setattr, self, "_active_limit_ref", None)
+                else:
+                    out = extractor.extract(source, crawl=False)
             elif source_type in ("video", "bilibili"):
                 from ..extractors import auto_detect_video
                 out = auto_detect_video(source, config=cfg)
