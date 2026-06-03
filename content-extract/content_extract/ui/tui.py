@@ -857,19 +857,17 @@ class TUIApp(App):
         existing = next((t for t in self._tasks if t.source == event.source), None)
 
         if existing and not event.force:
-            if existing.status in ("needs_transcription", "failed"):
-                # 未完成状态：直接继续，不需要弹窗
+            # 未完成 / 部分完成：直接续跑，不弹窗
+            if existing.status in ("needs_transcription", "failed", "done_partial"):
                 self._start_extract(event, force=False)
             else:
-                # 已完成：弹窗询问用户
+                # 全部完成（done）：弹窗让用户决定
                 def handle_choice(choice: str | None) -> None:
                     if choice == "btn-resume":
                         self._start_extract(event, force=False)
                     elif choice == "btn-force":
                         self._start_extract(event, force=True)
-                    # btn-cancel 或关闭：什么都不做
 
-                # 统计已有文件数，用于弹窗显示进度提示
                 file_count = self._count_files_for(event.source)
                 self.push_screen(
                     DuplicateModal(
@@ -885,8 +883,15 @@ class TUIApp(App):
 
     def _start_extract(self, event: ExtractRequested, force: bool) -> None:
         """实际启动提取 worker，更新任务列表。"""
-        # 若已有记录，更新状态为 extracting；否则新建
         existing = next((t for t in self._tasks if t.source == event.source), None)
+
+        # 若是整站任务（web 类型且已有多页记录），自动补上 crawl=True
+        # 防止从 RecordActionModal / DuplicateModal 过来时 crawl 默认为 False
+        is_crawl_task = (
+            event.crawl
+            or (existing is not None and existing.source_type == "web" and existing.page_count > 1)
+        )
+
         if existing:
             existing.status = "extracting"
             existing.error = ""
@@ -897,12 +902,12 @@ class TUIApp(App):
                 status="extracting",
             ))
         self._refresh_queue()
-        crawl_hint = "（整站）" if event.crawl else ""
+        crawl_hint = "（整站）" if is_crawl_task else ""
         force_hint = "（强制）" if force else ""
         self.log_message(f"开始提取 [{event.source_type}]{crawl_hint}{force_hint}: {event.source}")
-        if event.crawl and event.source_type == "web":
+        if is_crawl_task and event.source_type == "web":
             self._show_progress_bar(total=200)
-        self._run_extract(event.source, event.source_type, event.update_wiki, event.crawl, force)
+        self._run_extract(event.source, event.source_type, event.update_wiki, is_crawl_task, force)
 
     def on_extract_done(self, event: ExtractDone) -> None:
         """提取完成后更新内存状态并刷新队列。"""
@@ -965,11 +970,17 @@ class TUIApp(App):
                 self._clear_record(task)
             elif choice == "btn-resume":
                 self.on_extract_requested(ExtractRequested(
-                    source=task.source, source_type=task.source_type, force=False
+                    source=task.source,
+                    source_type=task.source_type,
+                    crawl=(task.source_type == "web" and task.page_count > 1),
+                    force=False,
                 ))
             elif choice == "btn-force":
                 self.on_extract_requested(ExtractRequested(
-                    source=task.source, source_type=task.source_type, force=True
+                    source=task.source,
+                    source_type=task.source_type,
+                    crawl=(task.source_type == "web" and task.page_count > 1),
+                    force=True,
                 ))
 
         self.push_screen(RecordActionModal(task), handle_action)
