@@ -6,6 +6,18 @@ from pathlib import Path
 from .config import load_config
 from .registry import Registry
 
+# 工具启动时的工作目录，作为所有相对路径的锚点
+# 防止用户在子目录里运行 content-extract 时路径错位
+_LAUNCH_DIR: Path = Path.cwd()
+
+
+def get_raw_dir(output: str = "./raw") -> Path:
+    """解析输出目录：若为相对路径则基于启动目录，而非运行时 cwd。"""
+    p = Path(output)
+    if p.is_absolute():
+        return p
+    return (_LAUNCH_DIR / output).resolve()
+
 
 def _get_registry(output_dir: Path) -> Registry:
     return Registry(output_dir / ".processed.json")
@@ -58,7 +70,7 @@ def init_cmd() -> None:
 @click.option("--output", default="./raw", help="输出目录路径", type=click.Path())
 def status_cmd(output: str) -> None:
     """查看处理队列状态"""
-    output_dir = Path(output)
+    output_dir = get_raw_dir(output)
     reg = _get_registry(output_dir)
 
     done = reg.get_by_status("done")
@@ -89,7 +101,7 @@ def web_cmd(url: str, crawl: bool, limit: int, output: str, force: bool) -> None
     from .extractors.base import ExtractConfig
     from .extractors.web import WebExtractor
 
-    cfg = ExtractConfig(output_dir=Path(output), force=force)
+    cfg = ExtractConfig(output_dir=get_raw_dir(output), force=force)
     extractor = WebExtractor(config=cfg)
     result = extractor.extract(url, crawl=crawl, limit=limit)
     click.echo(f"完成: {result}")
@@ -106,7 +118,7 @@ def video_cmd(url: str, output: str, force: bool) -> None:
 
     raw_cfg = load_config()
     cookies = {k: str(Path(v).expanduser()) for k, v in raw_cfg.get("cookies", {}).items()}
-    cfg = ExtractConfig(output_dir=Path(output), force=force, cookies=cookies)
+    cfg = ExtractConfig(output_dir=get_raw_dir(output), force=force, cookies=cookies)
     result = auto_detect_video(url, config=cfg)
     click.echo(f"完成: {result}")
 
@@ -122,7 +134,7 @@ def transcribe_cmd(output: str, model: str | None, device: str | None) -> None:
     raw_cfg = load_config()
     w_cfg = raw_cfg.get("whisper", {})
     process_queue(
-        output_dir=Path(output),
+        output_dir=get_raw_dir(output),
         model=model or w_cfg.get("model", "medium"),
         device=device or w_cfg.get("device", "cpu"),
         compute_type=w_cfg.get("compute_type", "int8"),

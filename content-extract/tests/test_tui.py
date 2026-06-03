@@ -52,13 +52,15 @@ async def test_log_panel_exists():
 @pytest.mark.asyncio
 async def test_queue_empty_on_start(tmp_path, monkeypatch):
     """无 registry 文件时，队列面板初始行数为 0。"""
-    monkeypatch.chdir(tmp_path)
-    app = TUIApp()
-    async with app.run_test() as pilot:
-        from textual.widgets import DataTable
-        table = app.query_one("#queue-table", DataTable)
-        assert table.row_count == 0
-        await pilot.press("q")
+    # _RAW_DIR 已锚定到启动目录，通过 mock _load_registry 跳过真实 registry 加载
+    import content_extract.ui.tui as tui_mod
+    with patch.object(tui_mod.TUIApp, "_load_registry", return_value=None):
+        app = tui_mod.TUIApp()
+        async with app.run_test() as pilot:
+            from textual.widgets import DataTable
+            table = app.query_one("#queue-table", DataTable)
+            assert table.row_count == 0
+            await pilot.press("q")
 
 
 @pytest.mark.asyncio

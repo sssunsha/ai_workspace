@@ -27,6 +27,10 @@ from textual.widgets import (
 )
 from textual import work
 from textual.command import Provider, Hit, Hits, DiscoveryHit
+from ..cli import _LAUNCH_DIR, get_raw_dir as _get_raw_dir
+
+# TUI 使用启动时锚定的 raw 目录，防止工作目录漂移导致路径嵌套
+_RAW_DIR = _get_raw_dir()
 
 
 # ── 数据模型 ──────────────────────────────────────────────────────────────────
@@ -790,7 +794,7 @@ class TUIApp(App):
         整站爬取（output_file 在子目录下）按子目录合并为一条；
         单页提取保持一对一。
         """
-        registry_path = Path("./raw/.processed.json")
+        registry_path = _RAW_DIR / ".processed.json"
         if not registry_path.exists():
             return
         try:
@@ -924,7 +928,7 @@ class TUIApp(App):
         """统计与某个来源对应的 raw 目录下已有文件数。"""
         try:
             from ..extractors.web import _url_to_subfolder
-            subfolder = Path("./raw") / _url_to_subfolder(source)
+            subfolder = _RAW_DIR / _url_to_subfolder(source)
             if subfolder.is_dir():
                 return len(list(subfolder.glob("*.md")))
         except Exception:
@@ -1015,7 +1019,7 @@ class TUIApp(App):
 
         try:
             from ..extractors.base import ExtractConfig
-            cfg = ExtractConfig(output_dir=Path("./raw"), cookies=self._cookies, force=force)
+            cfg = ExtractConfig(output_dir=_RAW_DIR, cookies=self._cookies, force=force)
 
             if source_type == "web":
                 from ..extractors.web import WebExtractor
@@ -1072,7 +1076,7 @@ class TUIApp(App):
         """从内存列表和 registry 中删除指定任务的所有记录（按子目录批量清除）。"""
         try:
             from ..registry import Registry
-            reg = Registry(Path("./raw/.processed.json"))
+            reg = Registry(_RAW_DIR / ".processed.json")
             if task.output_file:
                 count = reg.remove_by_output_prefix(task.output_file)
                 self.log_message(f"已清空 {count} 条记录：{task.output_file}")
