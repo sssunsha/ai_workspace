@@ -126,17 +126,20 @@ class WebExtractor(BaseExtractor):
                 if out_path is not None:
                     self.log(f"[{len(results)}] {url} → {out_path.relative_to(self.config.output_dir)}")
                     results.append(out_path)
-                self._enqueue_links(links, seen, queue)
+                self._enqueue_links(links, seen, queue, seed_netloc, seed_lang)
                 if is_seed and not seed_notified:
                     seed_notified = True
                     self._notify_total(seen, reg, limit)
 
         return self._finish_crawl(site_url, limit, results, queue, reg)
 
-    def _enqueue_links(self, links: list[str], seen: set[str], queue) -> None:
-        """将新发现的内链加入 BFS 队列。"""
+    def _enqueue_links(
+        self, links: list[str], seen: set[str], queue,
+        seed_netloc: str, seed_lang: str,
+    ) -> None:
+        """将新发现的内链过滤后加入 BFS 队列（同域名 + 同语言）。"""
         for href in links:
-            if href not in seen:
+            if href not in seen and self._is_allowed(href, seed_netloc, seed_lang):
                 seen.add(href)
                 queue.append(href)
 

@@ -900,9 +900,8 @@ class TUIApp(App):
             parts = msg.split(":")
             if len(parts) == 4:
                 total, already, remaining = int(parts[1]), int(parts[2]), int(parts[3])
-                self.call_from_thread(
-                    self._show_limit_choice, total, already, remaining
-                )
+                # log_message 已在主线程，直接调用即可，不能再套 call_from_thread
+                self._show_limit_choice(total, already, remaining)
             return
 
         log_panel = self.query_one(LogPanel)
