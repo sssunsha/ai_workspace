@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -591,7 +592,8 @@ class HelpModal(ModalScreen):
   [bold]C[/bold]      清空日志面板
   [bold]O[/bold]      打开 Obsidian（macOS，打开 wiki/ 目录作为 vault）
   [bold]?[/bold]      显示本帮助
-  [bold]Q / Esc[/bold]  退出
+  [bold]Q[/bold]      直接退出
+  [bold]Esc[/bold]    关闭当前对话框；主界面双击 Esc 退出
 
 [bold yellow]━━ 记录操作（选中行后按 A）━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold yellow]
   [bold]继续抓取[/bold]    从上次断点继续，已有文件自动跳过
@@ -662,7 +664,7 @@ class TUIApp(App):
     _PROGRESS_BAR_ID = "progress-bar"  # 进度条组件 ID 常量
     BINDINGS = [
         Binding("q", "quit", "退出", show=True),
-        Binding("escape", "quit", "退出", show=False),
+        Binding("escape", "try_quit", "退出(双击)", show=False),
         Binding("ctrl+p", "command_palette", "菜单", show=True),
         Binding("a", "record_action", "记录操作", show=True),
         Binding("r", "retry_failed", "重试失败", show=True),
@@ -701,6 +703,8 @@ class TUIApp(App):
         # 当前整站爬取的进度（已写入页数）
         self._crawl_progress: int = 0
         self._crawl_limit: int = 200
+        # 记录上次按 Esc 的时间（用于双击检测）
+        self._last_esc_time: float = 0.0
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -993,6 +997,15 @@ class TUIApp(App):
     def action_clear_log(self) -> None:
         """清空日志面板。"""
         self.query_one("#log", RichLog).clear()
+
+    def action_try_quit(self) -> None:
+        """单击 Esc 提示，500ms 内再次按下才退出（防误触）。"""
+        now = time.monotonic()
+        if now - self._last_esc_time < 0.5:
+            self.exit()
+        else:
+            self._last_esc_time = now
+            self.log_message("[dim]再按一次 Esc 退出，或按 Q 直接退出[/dim]")
 
     def action_quit(self) -> None:
         """退出应用。"""
