@@ -25,6 +25,7 @@ from textual.widgets import (
     Static,
 )
 from textual import work
+from textual.command import Provider, Hit, Hits
 
 
 # ── 数据模型 ──────────────────────────────────────────────────────────────────
@@ -475,6 +476,40 @@ class LogPanel(Static):
         log.write(f"[dim]{ts}[/dim] {msg}")
 
 
+# ── 命令面板（Ctrl+P）─────────────────────────────────────────────────────────
+
+class AppCommands(Provider):
+    """为命令面板提供所有可执行操作，按分组排列。"""
+
+    # (显示名称, 帮助文字, action方法名)
+    _COMMANDS = [
+        # 提取操作
+        ("提取：继续抓取选中记录",      "对队列中选中行执行「继续/强制/清空」操作",  "record_action"),
+        ("提取：重试失败任务",           "重试第一个状态为 failed 的任务",            "retry_failed"),
+        # 日志
+        ("日志：清空日志面板",           "清除日志区所有内容",                        "clear_log"),
+        # 工具
+        ("工具：打开 Obsidian",          "macOS 打开 wiki/ 目录作为 Obsidian vault", "open_obsidian"),
+        # 帮助
+        ("帮助：显示操作手册",           "查看所有功能说明、快捷键和 CLI 命令",       "show_help"),
+        # 退出
+        ("退出应用",                     "关闭 Content Extract（同 Q / Esc）",        "quit"),
+    ]
+
+    async def search(self, query: str) -> Hits:
+        app = self.app
+        matcher = self.matcher(query)
+        for name, help_text, action in self._COMMANDS:
+            score = matcher.match(name)
+            if score > 0:
+                yield Hit(
+                    score=score,
+                    match_display=matcher.highlight(name),
+                    command=lambda a=action: app.call_action(a),
+                    help=help_text,
+                )
+
+
 # ── 帮助弹窗 ──────────────────────────────────────────────────────────────────
 
 class HelpModal(ModalScreen):
@@ -531,11 +566,12 @@ class HelpModal(ModalScreen):
   [bold]—[/bold]          单页提取或无法统计
 
 [bold yellow]━━ 快捷键 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold yellow]
-  [bold]A[/bold]  对队列中选中的记录执行操作（继续抓取 / 强制更新 / 清空记录）
-  [bold]R[/bold]  重试第一个失败的任务
-  [bold]C[/bold]  清空日志面板
-  [bold]O[/bold]  打开 Obsidian（macOS，打开 wiki/ 目录作为 vault）
-  [bold]?[/bold]  显示本帮助
+  [bold]Ctrl+P[/bold]  打开命令面板（菜单），可搜索所有操作
+  [bold]A[/bold]      对队列中选中的记录执行操作（继续抓取 / 强制更新 / 清空记录）
+  [bold]R[/bold]      重试第一个失败的任务
+  [bold]C[/bold]      清空日志面板
+  [bold]O[/bold]      打开 Obsidian（macOS，打开 wiki/ 目录作为 vault）
+  [bold]?[/bold]      显示本帮助
   [bold]Q / Esc[/bold]  退出
 
 [bold yellow]━━ 记录操作（选中行后按 A）━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold yellow]
@@ -603,10 +639,12 @@ class TUIApp(App):
     """content-extract 全屏 TUI 主应用。"""
 
     TITLE = "Content Extract"
+    COMMANDS = {AppCommands}        # 注册命令面板，Ctrl+P 触发
     _PROGRESS_BAR_ID = "progress-bar"  # 进度条组件 ID 常量
     BINDINGS = [
         Binding("q", "quit", "退出", show=True),
         Binding("escape", "quit", "退出", show=False),
+        Binding("ctrl+p", "command_palette", "菜单", show=True),
         Binding("a", "record_action", "记录操作", show=True),
         Binding("r", "retry_failed", "重试失败", show=True),
         Binding("c", "clear_log", "清空日志", show=True),
