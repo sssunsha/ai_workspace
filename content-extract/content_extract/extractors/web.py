@@ -103,8 +103,8 @@ class WebExtractor(BaseExtractor):
     ) -> Path:
         """整站爬取（BFS），最多写入 limit 篇新页面。
 
-        已处理的 URL 仍请求以获取内链（保证 BFS 能向下展开），但跳过写文件。
-        只跟进与 seed_lang 相同语言的内链，其他语言静默跳过。
+        种子页面无论是否已处理都访问一次以获取内链；其他已处理页面直接跳过。
+        发现总数超过 limit 时通过 log 发送 __LIMIT_CHOICE__ 信号通知 TUI。
         """
         from crawl4ai import AsyncWebCrawler
         from collections import deque
@@ -113,11 +113,11 @@ class WebExtractor(BaseExtractor):
         seen: set[str] = {site_url}
         results: list[Path] = []
         queue: deque[str] = deque([site_url])
+        seed_notified = False
 
         async with AsyncWebCrawler(verbose=False) as crawler:
             while queue and len(results) < limit:
                 url = queue.popleft()
-                # 种子页面必须访问以获取内链，其他已处理 URL 直接跳过
                 is_seed = (url == site_url)
                 out_path, links = await self._process_url(
                     url, site_url, seed_netloc, seed_lang, reg, crawler,
@@ -126,21 +126,39 @@ class WebExtractor(BaseExtractor):
                 if out_path is not None:
                     self.log(f"[{len(results)}] {url} → {out_path.relative_to(self.config.output_dir)}")
                     results.append(out_path)
-                for href in links:
-                    if href not in seen:
-                        seen.add(href)
-                        queue.append(href)
+                self._enqueue_links(links, seen, queue)
+                if is_seed and not seed_notified:
+                    seed_notified = True
+                    self._notify_total(seen, reg, limit)
 
+        return self._finish_crawl(site_url, limit, results, queue, reg)
+
+    def _enqueue_links(self, links: list[str], seen: set[str], queue) -> None:
+        """将新发现的内链加入 BFS 队列。"""
+        for href in links:
+            if href not in seen:
+                seen.add(href)
+                queue.append(href)
+
+    def _notify_total(self, seen: set[str], reg: Registry, limit: int) -> None:
+        """种子页面处理完后统计总数，若超过 limit 则发信号给 TUI 弹窗。"""
+        total = len(seen)
+        already = sum(1 for u in seen if reg.is_processed(u))
+        if total > limit:
+            self.log(f"__LIMIT_CHOICE__:{total}:{already}:{total - already}")
+
+    def _finish_crawl(
+        self, site_url: str, limit: int, results: list[Path], queue, reg: Registry
+    ) -> Path:
+        """BFS 结束后记录状态并返回入口页路径。"""
         subfolder_dir = self.config.output_dir / _url_to_subfolder(site_url)
         subfolder_name = _url_to_subfolder(site_url)
-        # 区分「到达上限」和「队列真正耗尽」两种结束原因
         if queue:
             remaining = len(queue)
-            # 批量将本次已完成记录标记为 done_partial，记录剩余队列数
             reg.mark_partial(subfolder_name, queue_remaining=remaining)
             self.log(
                 f"已到达页数上限（{limit}），本次写入 {len(results)} 页 → {subfolder_dir}/\n"
-                f"队列中还有约 {remaining} 个待处理 URL，可再次运行继续抓取（断点续传自动跳过已有页面）"
+                f"队列中还有约 {remaining} 个待处理 URL，可再次运行继续抓取"
             )
         else:
             self.log(f"整站爬取完成，共 {len(results)} 页 → {subfolder_dir}/（队列已全部处理）")
@@ -184,15 +202,28 @@ class WebExtractor(BaseExtractor):
         return should_follow(url, seed_lang)
 
     def _write_page(self, url: str, markdown: str, reg: Registry, seed_url: str) -> Path:
-        """写入 raw 文件到对应子目录，更新 registry，返回绝对路径。"""
+        """写入 raw 文件到对应子目录，更新 registry，返回绝对路径。
+
+        若 content hash 与 registry 中记录的相同，跳过写文件（内容未变化）。
+        """
+        import hashlib
         subfolder = _url_to_subfolder(seed_url)
         filename = _url_to_page_filename(url, seed_url)
         sub_dir = self.config.output_dir / subfolder
         sub_dir.mkdir(parents=True, exist_ok=True)
         out_path = sub_dir / filename
+
+        # 计算新内容的 hash
+        new_hash = hashlib.sha256(markdown.encode("utf-8")).hexdigest()[:8]
+
+        # 若 hash 未变且文件已存在，跳过写入（内容无变化）
+        existing = reg._data.get(url, {})
+        if not self.config.force and existing.get("content_hash") == new_hash and out_path.exists():
+            self.log(f"[无变化] {url}")
+            return out_path
+
         content_hash = write_frontmatter_file(
             path=out_path, content=markdown, source=url, type="web",
         )
-        # output_file 存相对于 output_dir 的路径，供 registry 查找
         reg.mark(url, "done", output_file=f"{subfolder}/{filename}", content_hash=content_hash)
         return out_path

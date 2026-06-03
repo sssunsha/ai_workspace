@@ -477,6 +477,58 @@ class LogPanel(Static):
         log.write(f"[dim]{ts}[/dim] {msg}")
 
 
+# ── 抓取总数确认弹窗 ──────────────────────────────────────────────────────────
+
+class LimitChoiceModal(ModalScreen[int]):
+    """发现网站总 URL 数超过当前 limit 时弹出，让用户选择抓取策略。"""
+
+    DEFAULT_CSS = """
+    LimitChoiceModal { align: center middle; }
+    LimitChoiceModal > Vertical {
+        background: $surface;
+        border: thick $accent;
+        padding: 2 4;
+        width: 76;
+        height: auto;
+    }
+    LimitChoiceModal Label { margin-bottom: 1; }
+    LimitChoiceModal Horizontal {
+        height: auto;
+        align: center middle;
+        margin-top: 1;
+    }
+    LimitChoiceModal Button { margin: 0 1; min-width: 18; }
+    """
+
+    def __init__(self, total: int, already: int, remaining: int, current_limit: int) -> None:
+        super().__init__()
+        self._total = total
+        self._already = already
+        self._remaining = remaining
+        self._current_limit = current_limit
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label("发现网站总资源数")
+            yield Label(
+                f"共发现 [bold]{self._total}[/bold] 个页面\n"
+                f"已抓取：{self._already}  待抓取：{self._remaining}\n"
+                f"当前每次上限：{self._current_limit} 页"
+            )
+            with Horizontal():
+                yield Button(f"一次全部抓取（{self._remaining} 页）", id="btn-all", variant="primary")
+                yield Button(f"沿用上限（{self._current_limit} 页）", id="btn-keep")
+                yield Button("取消", id="btn-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-all":
+            self.dismiss(self._total)   # 返回全量数作为新 limit
+        elif event.button.id == "btn-keep":
+            self.dismiss(self._current_limit)
+        else:
+            self.dismiss(0)  # 0 = 取消（不改变 limit）
+
+
 # ── 命令面板（Ctrl+P）─────────────────────────────────────────────────────────
 
 class AppCommands(Provider):
@@ -814,6 +866,28 @@ class TUIApp(App):
             total_estimate=total_estimate,
         )
 
+    def _show_limit_choice(self, total: int, already: int, remaining: int) -> None:
+        """弹出总数确认弹窗，用户可选择一次全部抓取或沿用当前上限。"""
+        def handle(new_limit: int | None) -> None:
+            if not new_limit:
+                return
+            if new_limit != self._crawl_limit:
+                self._crawl_limit = new_limit
+                self.log_message(f"[cyan]已更新抓取上限为 {new_limit} 页，下次续抓时生效[/cyan]")
+                self._show_progress_bar(total=new_limit)
+            else:
+                self.log_message(f"[dim]沿用当前上限 {new_limit} 页[/dim]")
+
+        self.push_screen(
+            LimitChoiceModal(
+                total=total,
+                already=already,
+                remaining=remaining,
+                current_limit=self._crawl_limit,
+            ),
+            handle,
+        )
+
     def _refresh_queue(self) -> None:
         """刷新队列面板显示。"""
         queue_panel = self.query_one(QueuePanel)
@@ -821,6 +895,16 @@ class TUIApp(App):
 
     def log_message(self, msg: str) -> None:
         """向日志面板写入一行消息，线程安全（可从 worker 线程调用）。"""
+        # 拦截 __LIMIT_CHOICE__ 信号：不写日志，改为弹窗
+        if msg.startswith("__LIMIT_CHOICE__:"):
+            parts = msg.split(":")
+            if len(parts) == 4:
+                total, already, remaining = int(parts[1]), int(parts[2]), int(parts[3])
+                self.call_from_thread(
+                    self._show_limit_choice, total, already, remaining
+                )
+            return
+
         log_panel = self.query_one(LogPanel)
         log_panel.write(msg)
         # 解析 WebExtractor 的进度日志格式 "[N] url → file"，推进进度条
@@ -906,8 +990,8 @@ class TUIApp(App):
         force_hint = "（强制）" if force else ""
         self.log_message(f"开始提取 [{event.source_type}]{crawl_hint}{force_hint}: {event.source}")
         if is_crawl_task and event.source_type == "web":
-            self._show_progress_bar(total=200)
-        self._run_extract(event.source, event.source_type, event.update_wiki, is_crawl_task, force)
+            self._show_progress_bar(total=self._crawl_limit)
+        self._run_extract(event.source, event.source_type, event.update_wiki, is_crawl_task, force, self._crawl_limit)
 
     def on_extract_done(self, event: ExtractDone) -> None:
         """提取完成后更新内存状态并刷新队列。"""
@@ -925,7 +1009,7 @@ class TUIApp(App):
             self.log_message(f"[red]✗ 失败：{event.error}[/red]")
 
     @work(thread=True)
-    def _run_extract(self, source: str, source_type: str, update_wiki: bool, crawl: bool = False, force: bool = False) -> None:
+    def _run_extract(self, source: str, source_type: str, update_wiki: bool, crawl: bool = False, force: bool = False, limit: int = 200) -> None:
         """在独立线程执行提取，通过 call_from_thread 回调日志。"""
         def on_progress(msg: str) -> None:
             self.call_from_thread(self.log_message, msg)
@@ -937,7 +1021,7 @@ class TUIApp(App):
             if source_type == "web":
                 from ..extractors.web import WebExtractor
                 extractor = WebExtractor(config=cfg, on_progress=on_progress)
-                out = extractor.extract(source, crawl=crawl)
+                out = extractor.extract(source, crawl=crawl, limit=limit)
             elif source_type in ("video", "bilibili"):
                 from ..extractors import auto_detect_video
                 out = auto_detect_video(source, config=cfg)
