@@ -481,13 +481,16 @@ class HelpModal(ModalScreen):
     """操作说明弹窗：分类展示所有功能和快捷键。"""
 
     DEFAULT_CSS = """
-    HelpModal { align: center middle; }
+    HelpModal {
+        align: center middle;
+        padding: 1 2;
+    }
     HelpModal > Vertical {
         background: $surface;
         border: thick $primary;
         padding: 1 3;
-        width: 84;
-        height: 38;
+        width: 100%;
+        height: 100%;
     }
     HelpModal #help-title {
         text-align: center;
