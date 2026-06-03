@@ -499,15 +499,23 @@ class AppCommands(Provider):
     async def search(self, query: str) -> Hits:
         app = self.app
         matcher = self.matcher(query)
-        for name, help_text, action in self._COMMANDS:
-            score = matcher.match(name)
-            if score > 0:
-                yield Hit(
-                    score=score,
-                    match_display=matcher.highlight(name),
-                    command=lambda a=action: app.call_action(a),
-                    help=help_text,
-                )
+        for i, (name, help_text, action) in enumerate(self._COMMANDS):
+            if query.strip():
+                score = matcher.match(name)
+                if score <= 0:
+                    continue
+                display = matcher.highlight(name)
+            else:
+                # 空查询时全部展示，score 按顺序递减保持原始顺序
+                score = 1.0 - i * 0.01
+                display = name
+            yield Hit(
+                score=score,
+                match_display=display,
+                command=lambda a=action: app.call_action(a),
+                text=name,
+                help=help_text,
+            )
 
 
 # ── 帮助弹窗 ──────────────────────────────────────────────────────────────────
