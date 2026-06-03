@@ -475,6 +475,125 @@ class LogPanel(Static):
         log.write(f"[dim]{ts}[/dim] {msg}")
 
 
+# ── 帮助弹窗 ──────────────────────────────────────────────────────────────────
+
+class HelpModal(ModalScreen):
+    """操作说明弹窗：分类展示所有功能和快捷键。"""
+
+    DEFAULT_CSS = """
+    HelpModal { align: center middle; }
+    HelpModal > Vertical {
+        background: $surface;
+        border: thick $primary;
+        padding: 1 3;
+        width: 84;
+        height: 38;
+    }
+    HelpModal #help-title {
+        text-align: center;
+        text-style: bold;
+        color: $accent;
+        margin-bottom: 1;
+    }
+    HelpModal RichLog {
+        height: 1fr;
+        border: none;
+        padding: 0;
+    }
+    HelpModal Horizontal {
+        height: auto;
+        align: center middle;
+        margin-top: 1;
+    }
+    """
+
+    _CONTENT = """\
+[bold yellow]━━ 提取来源 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold yellow]
+  输入 URL 或本地路径，选择来源类型后点击按钮：
+  [bold]提取[/bold]            抓取内容到 ./raw/ 目录，断点续传自动跳过已有页面
+  [bold]提取并更新 Wiki[/bold]  完成后弹出 Wiki 更新提示（功能待 Skill 实现）
+  [bold]来源类型[/bold]         自动识别 / web / video / ebook / code / docs / github / article
+  [bold]整站爬取[/bold]         勾选后对 web 类型执行 BFS 整站爬取（默认 limit=200）
+
+[bold yellow]━━ 状态图标说明 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold yellow]
+  [green]✓[/green]  done              全部完成（队列已耗尽）
+  [yellow]◑[/yellow]  done_partial      部分完成（到达页数上限，仍有未抓内容）
+  [cyan]⟳[/cyan]  extracting        正在抓取中
+  [red]✗[/red]  failed            抓取失败（可按 [bold]R[/bold] 重试）
+  [dim]⏳[/dim]  needs_transcription 视频无字幕，等待 Whisper 转录
+
+[bold yellow]━━ 进度列格式 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold yellow]
+  [bold]200/1579[/bold]   已抓 200 篇，估算目标 1579（来自中止时队列剩余数）
+  [bold]97/?[/bold]       已抓 97 篇，目标总数未知（旧记录）
+  [bold]—[/bold]          单页提取或无法统计
+
+[bold yellow]━━ 快捷键 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold yellow]
+  [bold]A[/bold]  对队列中选中的记录执行操作（继续抓取 / 强制更新 / 清空记录）
+  [bold]R[/bold]  重试第一个失败的任务
+  [bold]C[/bold]  清空日志面板
+  [bold]O[/bold]  打开 Obsidian（macOS，打开 wiki/ 目录作为 vault）
+  [bold]?[/bold]  显示本帮助
+  [bold]Q[/bold]  退出
+
+[bold yellow]━━ 记录操作（选中行后按 A）━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold yellow]
+  [bold]继续抓取[/bold]    从上次断点继续，已有文件自动跳过
+  [bold]强制更新[/bold]    忽略已有记录，重新下载覆盖所有文件
+  [bold]清空记录[/bold]    从队列和 .processed.json 中彻底删除该任务
+
+[bold yellow]━━ 重复来源检测 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold yellow]
+  提交已存在的 URL 时自动弹窗：
+  • failed / needs_transcription 状态 → 直接继续，无需确认
+  • done_partial（未抓完）→ 弹窗，默认选「继续抓取」
+  • done（全部完成）→ 弹窗，需选「继续」或「强制更新」或「放弃」
+
+[bold yellow]━━ 文件存储位置 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold yellow]
+  raw/                       所有提取结果的根目录
+  raw/{site}/                每个网站独立子目录（如 feelgoodpal-com__zh__blog/）
+  raw/.processed.json        统一记录文件（状态、进度、时间戳）
+  wiki/                      Claude Code 整理后的结构化知识库（需手动触发）
+
+[bold yellow]━━ CLI 命令（e 是快捷别名）━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold yellow]
+  [bold]e web <url> --crawl --limit 500[/bold]    整站爬取，最多 500 页
+  [bold]e video <bilibili-url>[/bold]             提取 Bilibili 视频字幕
+  [bold]e status[/bold]                           查看队列状态
+  [bold]e transcribe[/bold]                       处理 Whisper 转录队列
+  [bold]e init[/bold]                             初始化项目（生成 CLAUDE.md 等）
+"""
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label("Content Extract — 操作手册", id="help-title")
+            log = RichLog(highlight=False, markup=True, auto_scroll=False, id="help-log")
+            yield log
+            with Horizontal():
+                yield Button("关闭", id="btn-close", variant="primary")
+
+    def on_mount(self) -> None:
+        """挂载后写入帮助内容。"""
+        log = self.query_one("#help-log", RichLog)
+        for line in self._CONTENT.splitlines():
+            log.write(line)
+        log.scroll_home(animate=False)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss()
+
+    def on_key(self, event) -> None:
+        """支持方向键/Page Up/Down 滚动，Escape/Q 关闭。"""
+        key = event.key
+        log = self.query_one("#help-log", RichLog)
+        if key in ("up", "k"):
+            log.scroll_up()
+        elif key in ("down", "j"):
+            log.scroll_down()
+        elif key == "page_up":
+            log.scroll_page_up()
+        elif key == "page_down":
+            log.scroll_page_down()
+        elif key in ("escape", "q"):
+            self.dismiss()
+
+
 # ── 主应用 ────────────────────────────────────────────────────────────────────
 
 class TUIApp(App):
@@ -488,6 +607,7 @@ class TUIApp(App):
         Binding("r", "retry_failed", "重试失败", show=True),
         Binding("c", "clear_log", "清空日志", show=True),
         Binding("o", "open_obsidian", "打开Obsidian", show=True),
+        Binding("question_mark", "show_help", "帮助", show=True),
     ]
     DEFAULT_CSS = """
     TUIApp {
@@ -804,6 +924,10 @@ class TUIApp(App):
             self.log_message(f"[yellow]清空 registry 记录失败：{e}[/yellow]")
         self._tasks = [t for t in self._tasks if t.source != task.source]
         self._refresh_queue()
+
+    def action_show_help(self) -> None:
+        """显示操作手册弹窗。"""
+        self.push_screen(HelpModal())
 
     def action_clear_log(self) -> None:
         """清空日志面板。"""
