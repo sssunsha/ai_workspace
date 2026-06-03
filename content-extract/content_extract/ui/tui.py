@@ -25,7 +25,7 @@ from textual.widgets import (
     Static,
 )
 from textual import work
-from textual.command import Provider, Hit, Hits
+from textual.command import Provider, Hit, Hits, DiscoveryHit
 
 
 # ── 数据模型 ──────────────────────────────────────────────────────────────────
@@ -483,39 +483,50 @@ class AppCommands(Provider):
 
     # (显示名称, 帮助文字, action方法名)
     _COMMANDS = [
-        # 提取操作
-        ("提取：继续抓取选中记录",      "对队列中选中行执行「继续/强制/清空」操作",  "record_action"),
-        ("提取：重试失败任务",           "重试第一个状态为 failed 的任务",            "retry_failed"),
-        # 日志
-        ("日志：清空日志面板",           "清除日志区所有内容",                        "clear_log"),
-        # 工具
-        ("工具：打开 Obsidian",          "macOS 打开 wiki/ 目录作为 Obsidian vault", "open_obsidian"),
-        # 帮助
-        ("帮助：显示操作手册",           "查看所有功能说明、快捷键和 CLI 命令",       "show_help"),
-        # 退出
-        ("退出应用",                     "关闭 Content Extract（同 Q / Esc）",        "quit"),
+        ("提取：继续抓取选中记录",  "对队列中选中行执行「继续/强制/清空」操作",  "record_action"),
+        ("提取：重试失败任务",       "重试第一个状态为 failed 的任务",            "retry_failed"),
+        ("日志：清空日志面板",       "清除日志区所有内容",                        "clear_log"),
+        ("工具：打开 Obsidian",      "macOS 打开 wiki/ 目录作为 Obsidian vault", "open_obsidian"),
+        ("帮助：显示操作手册",       "查看所有功能说明、快捷键和 CLI 命令",       "show_help"),
+        ("退出应用",                 "关闭 Content Extract（同 Q / Esc）",        "quit"),
     ]
 
-    async def search(self, query: str) -> Hits:
+    def _make_callback(self, action: str):
+        """生成调用 TUIApp action 的回调。"""
         app = self.app
-        matcher = self.matcher(query)
-        for i, (name, help_text, action) in enumerate(self._COMMANDS):
-            if query.strip():
-                score = matcher.match(name)
-                if score <= 0:
-                    continue
-                display = matcher.highlight(name)
-            else:
-                # 空查询时全部展示，score 按顺序递减保持原始顺序
-                score = 1.0 - i * 0.01
-                display = name
-            yield Hit(
-                score=score,
-                match_display=display,
-                command=lambda a=action: app.call_action(a),
+        action_map = {
+            "record_action":  lambda: app.action_record_action(),
+            "retry_failed":   lambda: app.action_retry_failed(),
+            "clear_log":      lambda: app.action_clear_log(),
+            "open_obsidian":  lambda: app.action_open_obsidian(),
+            "show_help":      lambda: app.action_show_help(),
+            "quit":           lambda: app.action_quit(),
+        }
+        return action_map.get(action, lambda: None)
+
+    async def discover(self) -> Hits:
+        """面板打开时（空查询）展示全部命令。"""
+        for name, help_text, action in self._COMMANDS:
+            yield DiscoveryHit(
+                display=name,
+                command=self._make_callback(action),
                 text=name,
                 help=help_text,
             )
+
+    async def search(self, query: str) -> Hits:
+        """有输入时进行模糊匹配。"""
+        matcher = self.matcher(query)
+        for name, help_text, action in self._COMMANDS:
+            score = matcher.match(name)
+            if score > 0:
+                yield Hit(
+                    score=score,
+                    match_display=matcher.highlight(name),
+                    command=self._make_callback(action),
+                    text=name,
+                    help=help_text,
+                )
 
 
 # ── 帮助弹窗 ──────────────────────────────────────────────────────────────────
