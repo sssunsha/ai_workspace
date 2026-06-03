@@ -133,7 +133,7 @@ class DuplicateModal(ModalScreen[str]):
         background: $surface;
         border: thick $warning;
         padding: 2 4;
-        width: 70;
+        width: 76;
         height: auto;
     }
     DuplicateModal Label { margin-bottom: 1; }
@@ -157,24 +157,26 @@ class DuplicateModal(ModalScreen[str]):
 
     def compose(self) -> ComposeResult:
         status_text = {
-            "done": "✓ 已完成",
+            "done": "✓ 全部完成",
+            "done_partial": "◑ 部分完成（曾到达页数上限）",
             "needs_transcription": "⏳ 待转录",
             "failed": "✗ 失败",
         }.get(self._status, self._status)
-        # 若已抓文件数接近 limit（200），给出明确提示
-        count_hint = ""
+
+        info_lines = [
+            f"[bold]{self._source[:68]}[/bold]",
+            f"状态：{status_text}",
+            f"时间：{self._extracted_at[:10] or '未知'}",
+        ]
         if self._file_count > 0:
-            count_hint = f"  已抓：{self._file_count} 篇"
-            if self._file_count >= 190:
-                count_hint += "（上次可能到达页数上限，继续抓取可获取更多）"
+            info_lines.append(f"已抓：{self._file_count} 篇" + (
+                "（未全部完成，继续抓取可获取更多）" if self._file_count >= 190 else ""
+            ))
+
         with Vertical():
             yield Label("来源已存在")
-            yield Label(
-                f"[bold]{self._source[:60]}[/bold]\n"
-                f"状态：{status_text}  时间：{self._extracted_at[:10] or '未知'}{count_hint}"
-            )
+            yield Label("\n".join(info_lines))
             with Horizontal():
-                # 已完成但可能未抓完，或未完成状态，都显示「继续抓取」
                 yield Button("继续抓取", id="btn-resume", variant="primary")
                 yield Button("强制重新获取", id="btn-force", variant="warning")
                 yield Button("放弃", id="btn-cancel")
@@ -194,7 +196,7 @@ class RecordActionModal(ModalScreen[str]):
         background: $surface;
         border: thick $secondary;
         padding: 2 4;
-        width: 70;
+        width: 76;
         height: auto;
     }
     RecordActionModal Label { margin-bottom: 1; }
@@ -215,11 +217,26 @@ class RecordActionModal(ModalScreen[str]):
 
     def compose(self) -> ComposeResult:
         t = self._task
+        # 状态中文映射
+        status_label = {
+            "done": "✓ 全部完成",
+            "done_partial": "◑ 部分完成",
+            "failed": "✗ 失败",
+            "needs_transcription": "⏳ 待转录",
+            "extracting": "⟳ 抓取中",
+        }.get(t.status, t.status)
+
+        progress_str = ""
+        if t.total_estimate > 0:
+            progress_str = f"  进度：{t.page_count}/{t.total_estimate}"
+        elif t.page_count > 0:
+            progress_str = f"  已抓：{t.page_count} 篇"
+
         with Vertical():
             yield Label("记录操作")
             yield Label(
-                f"[bold]{t.source[:60]}[/bold]\n"
-                f"类型：{t.source_type or '—'}  状态：{_STATUS_ICONS.get(t.status, '?')} {t.status}"
+                f"[bold]{t.source[:68]}[/bold]\n"
+                f"类型：{t.source_type or '—'}  状态：{status_label}{progress_str}"
             )
             # 第一行：操作按钮
             with Horizontal():
