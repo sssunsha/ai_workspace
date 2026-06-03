@@ -140,7 +140,10 @@ class DuplicateModal(ModalScreen[str]):
         align: center middle;
         margin-top: 1;
     }
-    DuplicateModal Button { margin: 0 1; }
+    DuplicateModal Button {
+        margin: 0 1;
+        min-width: 16;
+    }
     """
 
     def __init__(self, source: str, status: str, extracted_at: str, file_count: int = 0) -> None:
@@ -198,7 +201,10 @@ class RecordActionModal(ModalScreen[str]):
         align: center middle;
         margin-top: 1;
     }
-    RecordActionModal Button { margin: 0 1; }
+    RecordActionModal Button {
+        margin: 0 1;
+        min-width: 14;
+    }
     """
 
     def __init__(self, task: "TaskEntry") -> None:
@@ -213,10 +219,13 @@ class RecordActionModal(ModalScreen[str]):
                 f"[bold]{t.source[:60]}[/bold]\n"
                 f"类型：{t.source_type or '—'}  状态：{_STATUS_ICONS.get(t.status, '?')} {t.status}"
             )
+            # 第一行：操作按钮
             with Horizontal():
                 yield Button("继续抓取", id="btn-resume", variant="primary")
                 yield Button("强制更新", id="btn-force", variant="warning")
                 yield Button("清空记录", id="btn-clear", variant="error")
+            # 第二行：取消按钮单独一行，居中
+            with Horizontal():
                 yield Button("取消", id="btn-cancel")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
