@@ -536,7 +536,7 @@ class HelpModal(ModalScreen):
   [bold]C[/bold]  清空日志面板
   [bold]O[/bold]  打开 Obsidian（macOS，打开 wiki/ 目录作为 vault）
   [bold]?[/bold]  显示本帮助
-  [bold]Q[/bold]  退出
+  [bold]Q / Esc[/bold]  退出
 
 [bold yellow]━━ 记录操作（选中行后按 A）━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/bold yellow]
   [bold]继续抓取[/bold]    从上次断点继续，已有文件自动跳过
@@ -606,6 +606,7 @@ class TUIApp(App):
     _PROGRESS_BAR_ID = "progress-bar"  # 进度条组件 ID 常量
     BINDINGS = [
         Binding("q", "quit", "退出", show=True),
+        Binding("escape", "quit", "退出", show=False),
         Binding("a", "record_action", "记录操作", show=True),
         Binding("r", "retry_failed", "重试失败", show=True),
         Binding("c", "clear_log", "清空日志", show=True),
