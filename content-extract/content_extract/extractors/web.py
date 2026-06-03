@@ -117,8 +117,11 @@ class WebExtractor(BaseExtractor):
         async with AsyncWebCrawler(verbose=False) as crawler:
             while queue and len(results) < limit:
                 url = queue.popleft()
+                # 种子页面必须访问以获取内链，其他已处理 URL 直接跳过
+                is_seed = (url == site_url)
                 out_path, links = await self._process_url(
-                    url, site_url, seed_netloc, seed_lang, reg, crawler
+                    url, site_url, seed_netloc, seed_lang, reg, crawler,
+                    skip_if_done=(not is_seed),
                 )
                 if out_path is not None:
                     self.log(f"[{len(results)}] {url} → {out_path.relative_to(self.config.output_dir)}")
@@ -151,14 +154,17 @@ class WebExtractor(BaseExtractor):
         seed_lang: str,
         reg: Registry,
         crawler,
+        skip_if_done: bool = True,
     ) -> tuple[Path | None, list[str]]:
         """处理单个 URL：返回 (写入路径或None, 内链列表)。
 
-        已处理的 URL 仍请求以获取内链，但跳过写文件。
+        skip_if_done=True（默认）：已处理的 URL 直接跳过，不发网络请求。
+        skip_if_done=False（种子页面用）：即使已处理也要请求一次以获取内链。
         """
         if not self._is_allowed(url, seed_netloc, seed_lang):
             return None, []
-        already_done = not self.config.force and reg.is_processed(url)
+        if skip_if_done and not self.config.force and reg.is_processed(url):
+            return None, []
         result = await crawler.arun(url=url)
         if not result.success:
             return None, []
@@ -166,7 +172,7 @@ class WebExtractor(BaseExtractor):
             urljoin(site_url, link.get("href", ""))
             for link in (result.links.get("internal") or [])
         ]
-        if already_done:
+        if not self.config.force and reg.is_processed(url):
             return None, links
         out_path = self._write_page(url, result.markdown or "", reg, seed_url=site_url)
         return out_path, links
