@@ -129,11 +129,15 @@ class WebExtractor(BaseExtractor):
                         queue.append(href)
 
         subfolder_dir = self.config.output_dir / _url_to_subfolder(site_url)
+        subfolder_name = _url_to_subfolder(site_url)
         # 区分「到达上限」和「队列真正耗尽」两种结束原因
         if queue:
+            remaining = len(queue)
+            # 批量将本次已完成记录标记为 done_partial，记录剩余队列数
+            reg.mark_partial(subfolder_name, queue_remaining=remaining)
             self.log(
                 f"已到达页数上限（{limit}），本次写入 {len(results)} 页 → {subfolder_dir}/\n"
-                f"队列中还有约 {len(queue)} 个待处理 URL，可再次运行继续抓取（断点续传自动跳过已有页面）"
+                f"队列中还有约 {remaining} 个待处理 URL，可再次运行继续抓取（断点续传自动跳过已有页面）"
             )
         else:
             self.log(f"整站爬取完成，共 {len(results)} 页 → {subfolder_dir}/（队列已全部处理）")

@@ -38,17 +38,19 @@ class TaskEntry:
     """
     source: str        # 入口 URL 或本地路径（seed_url）
     source_type: str
-    status: str        # extracting / done / failed / needs_transcription
+    status: str        # extracting / done / done_partial / failed / needs_transcription
     output_file: str = ""    # 整站时是子目录名；单页时是文件相对路径
     error: str = ""
     extracted_at: str = ""
     page_count: int = 0      # 整站爬取已完成页数；0 表示单页或未知
+    total_estimate: int = 0  # 估算目标总数（已完成 + 队列剩余）；0 表示未知或已全部完成
 
 
 # 状态图标映射
 _STATUS_ICONS = {
     "extracting": "⟳",
     "done": "✓",
+    "done_partial": "◑",   # 已完成但未全部抓取（到达 limit 上限）
     "failed": "✗",
     "needs_transcription": "⏳",
 }
@@ -383,7 +385,7 @@ class QueuePanel(Static):
 
     def compose(self) -> ComposeResult:
         table = DataTable(id="queue-table", zebra_stripes=True)
-        table.add_columns("状态", "类型", "来源", "时间")
+        table.add_columns("状态", "类型", "来源", "进度", "时间")
         yield table
         yield Label("", id="queue-summary")
 
@@ -397,7 +399,14 @@ class QueuePanel(Static):
             time_short = t.extracted_at[:10] if t.extracted_at else "—"
             # 整站任务显示"类型(页数)"，单页显示类型
             type_str = f"{t.source_type}({t.page_count})" if t.page_count > 1 else (t.source_type or "—")
-            table.add_row(icon, type_str, source_short, time_short)
+            # 进度列：已抓/目标，目标未知时显示已抓数或"—"
+            if t.total_estimate > 0:
+                progress_str = f"{t.page_count}/{t.total_estimate}"
+            elif t.page_count > 0:
+                progress_str = f"{t.page_count}/?"
+            else:
+                progress_str = "—"
+            table.add_row(icon, type_str, source_short, progress_str, time_short)
         self.query_one("#queue-summary", Label).update(self._build_summary(tasks))
 
     @staticmethod
@@ -413,7 +422,7 @@ class QueuePanel(Static):
             if t.source_type and t.source_type != "—":
                 type_counts[t.source_type] = type_counts.get(t.source_type, 0) + 1
 
-        icon_map = {"done": "✓", "extracting": "⟳", "needs_transcription": "⏳", "failed": "✗"}
+        icon_map = {"done": "✓", "done_partial": "◑", "extracting": "⟳", "needs_transcription": "⏳", "failed": "✗"}
         parts = [f"共 {len(tasks)} 条"] + [
             f"{icon_map[k]}{v}" for k, v in icon_map.items() if counts.get(k)
         ]
@@ -534,7 +543,7 @@ class TUIApp(App):
             from ..registry import Registry
             reg = Registry(registry_path)
             all_entries = [
-                e for status in ("done", "failed", "needs_transcription")
+                e for status in ("done", "done_partial", "failed", "needs_transcription")
                 for e in reg.get_by_status(status)
             ]
             groups = self._group_entries(all_entries)
@@ -567,7 +576,7 @@ class TUIApp(App):
     @staticmethod
     def _build_task_entry(g: dict) -> "TaskEntry":
         """从聚合分组构建单条 TaskEntry。"""
-        _priority = {"failed": 3, "needs_transcription": 2, "done": 1}
+        _priority = {"failed": 3, "needs_transcription": 2, "done_partial": 1, "done": 0}
         entries = g["entries"]
         subfolder = g["subfolder"]
         worst = max(entries, key=lambda e, p=_priority: p.get(e.get("status", "done"), 0))
@@ -583,6 +592,15 @@ class TUIApp(App):
         source_type = _infer_type(sample_file)
         if source_type == "—":
             source_type = "web" if len(entries) > 1 else detect_source_type(seed)
+
+        # 计算目标总数估算：已完成页数 + 中止时队列剩余数
+        page_count = len(entries)
+        queue_remaining = max(
+            (e.get("queue_remaining", 0) or 0 for e in entries),
+            default=0,
+        )
+        total_estimate = (page_count + queue_remaining) if queue_remaining > 0 else 0
+
         return TaskEntry(
             source=seed,
             source_type=source_type,
@@ -590,7 +608,8 @@ class TUIApp(App):
             output_file=subfolder,
             error=worst.get("error", "") or "",
             extracted_at=latest.get("extracted_at", ""),
-            page_count=len(entries),
+            page_count=page_count,
+            total_estimate=total_estimate,
         )
 
     def _refresh_queue(self) -> None:

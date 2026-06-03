@@ -43,6 +43,23 @@ class Registry:
             self.save()
         return len(to_remove)
 
+    def mark_partial(self, output_prefix: str, queue_remaining: int) -> None:
+        """将某子目录下所有 done 记录升级为 done_partial，并记录剩余队列数。
+
+        整站爬取到达 limit 上限时调用：标记本次任务「已完成但未全部抓取」。
+        queue_remaining 是中止时队列里还剩的待处理 URL 数，作为「剩余总数」估算。
+        """
+        changed = False
+        for v in self._data.values():
+            output_file = v.get("output_file", "")
+            if output_file.startswith(output_prefix + "/") or output_file == output_prefix:
+                if v.get("status") == "done":
+                    v["status"] = "done_partial"
+                    v["queue_remaining"] = queue_remaining
+                    changed = True
+        if changed:
+            self.save()
+
     def save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._path.write_text(json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")
