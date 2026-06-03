@@ -31,6 +31,7 @@ from ..cli import _LAUNCH_DIR, get_raw_dir as _get_raw_dir
 
 # TUI 使用启动时锚定的 raw 目录，防止工作目录漂移导致路径嵌套
 _RAW_DIR = _get_raw_dir()
+_REGISTRY_PATH = _RAW_DIR / ".processed.json"
 
 
 # ── 数据模型 ──────────────────────────────────────────────────────────────────
@@ -796,7 +797,7 @@ class TUIApp(App):
         整站爬取（output_file 在子目录下）按子目录合并为一条；
         单页提取保持一对一。
         """
-        registry_path = _RAW_DIR / ".processed.json"
+        registry_path = _REGISTRY_PATH
         if not registry_path.exists():
             return
         try:
@@ -984,44 +985,71 @@ class TUIApp(App):
         """实际启动提取 worker，更新任务列表。"""
         existing = next((t for t in self._tasks if t.source == event.source), None)
 
-        # 若是整站任务（web 类型且已有多页记录），自动补上 crawl=True
-        # 防止从 RecordActionModal / DuplicateModal 过来时 crawl 默认为 False
+        # 整站任务判断：event.crawl 为 True，或已有记录是多页 web 任务
+        # 注意：已有记录的 source_type 可能被 _build_task_entry 推断为 article（detect_source_type 的结果），
+        # 需要同时检查 page_count > 1 来确认是整站任务，不依赖 source_type 是否为 "web"
         is_crawl_task = (
             event.crawl
-            or (existing is not None and existing.source_type == "web" and existing.page_count > 1)
+            or (existing is not None and existing.page_count > 1)
         )
+        # 确保整站任务的 source_type 始终为 web（已有记录可能被推断为 article）
+        source_type = "web" if is_crawl_task else event.source_type
 
         if existing:
             existing.status = "extracting"
+            existing.source_type = source_type
             existing.error = ""
         else:
             self._tasks.append(TaskEntry(
                 source=event.source,
-                source_type=event.source_type,
+                source_type=source_type,
                 status="extracting",
             ))
         self._refresh_queue()
         crawl_hint = "（整站）" if is_crawl_task else ""
         force_hint = "（强制）" if force else ""
-        self.log_message(f"开始提取 [{event.source_type}]{crawl_hint}{force_hint}: {event.source}")
-        if is_crawl_task and event.source_type == "web":
+        self.log_message(f"开始提取 [{source_type}]{crawl_hint}{force_hint}: {event.source}")
+        if is_crawl_task:
             self._show_progress_bar(total=self._crawl_limit)
-        self._run_extract(event.source, event.source_type, event.update_wiki, is_crawl_task, force, self._crawl_limit)
+        self._run_extract(event.source, source_type, event.update_wiki, is_crawl_task, force, self._crawl_limit)
 
     def on_extract_done(self, event: ExtractDone) -> None:
-        """提取完成后更新内存状态并刷新队列。"""
+        """提取完成后更新内存状态，从 registry 重新读取最新进度并刷新队列。"""
         for t in self._tasks:
             if t.source == event.source and t.status == "extracting":
                 t.status = "done" if event.success else "failed"
                 t.output_file = event.output_file
                 t.error = event.error
                 break
+        # 从 registry 重新加载该任务的最新进度（page_count / total_estimate / extracted_at）
+        self._reload_task_from_registry(event.source)
         self._refresh_queue()
         self._hide_progress_bar()
         if event.success:
             self.log_message(f"[green]✓ 完成 → {event.output_file}[/green]")
         else:
             self.log_message(f"[red]✗ 失败：{event.error}[/red]")
+
+    def _reload_task_from_registry(self, source: str) -> None:
+        """从 registry 重新加载指定来源的最新数据，更新内存中的 TaskEntry。"""
+        try:
+            from ..registry import Registry
+            reg = Registry(_REGISTRY_PATH)
+            all_entries = [
+                e for s in ("done", "done_partial", "failed", "needs_transcription")
+                for e in reg.get_by_status(s)
+            ]
+            groups = self._group_entries(all_entries)
+            for g in groups.values():
+                fresh = self._build_task_entry(g)
+                for i, t in enumerate(self._tasks):
+                    if t.source == fresh.source:
+                        # 保留 status（on_extract_done 已设好），更新进度字段
+                        fresh.status = t.status
+                        self._tasks[i] = fresh
+                        break
+        except Exception as e:
+            self.log_message(f"[dim]进度刷新失败：{e}[/dim]")
 
     @work(thread=True)
     def _run_extract(self, source: str, source_type: str, update_wiki: bool, crawl: bool = False, force: bool = False, limit: int = 200) -> None:
@@ -1097,7 +1125,7 @@ class TUIApp(App):
         """从内存列表和 registry 中删除指定任务的所有记录（按子目录批量清除）。"""
         try:
             from ..registry import Registry
-            reg = Registry(_RAW_DIR / ".processed.json")
+            reg = Registry(_REGISTRY_PATH)
             if task.output_file:
                 count = reg.remove_by_output_prefix(task.output_file)
                 self.log_message(f"已清空 {count} 条记录：{task.output_file}")
