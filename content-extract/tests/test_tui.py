@@ -73,18 +73,16 @@ async def test_keyboard_quit():
 
 @pytest.mark.asyncio
 async def test_input_url_sets_value(tmp_path, monkeypatch):
-    """在 URL 输入框设置 bilibili URL 后，输入框有内容（提取被 mock）。
-
-    注意：textual 0.8.x Pilot 没有 type() 方法，直接设置 Input.value 代替。
-    """
-    monkeypatch.chdir(tmp_path)
-    with patch.object(TUIApp, "_run_extract"):
-        app = TUIApp()
-        async with app.run_test() as pilot:
-            from textual.widgets import Input
-            url_input = app.query_one("#url-input", Input)
-            # 直接设置 value，textual 0.8.x Pilot 无 type() 方法
-            url_input.value = "https://www.bilibili.com/video/BV1abc"
-            await pilot.pause()
-            assert "bilibili" in url_input.value
-            await pilot.press("q")
+    """在 URL 输入框设置 bilibili URL 后，输入框有内容（提取被 mock）。"""
+    import content_extract.ui.tui as tui_mod
+    with patch.object(tui_mod.TUIApp, "_run_extract"):
+        with patch.object(tui_mod.TUIApp, "_load_registry", return_value=None):
+            app = tui_mod.TUIApp()
+            async with app.run_test() as pilot:
+                from textual.widgets import TextArea
+                textarea = app.query_one("#url-textarea", TextArea)
+                # TextArea 直接设置文本内容
+                textarea.load_text("https://www.bilibili.com/video/BV1abc")
+                await pilot.pause()
+                assert "bilibili" in textarea.text
+                await pilot.press("q")

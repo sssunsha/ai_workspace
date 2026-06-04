@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
@@ -9,6 +10,30 @@ from .base import BaseExtractor, ExtractConfig
 from ..registry import Registry
 from ..utils.frontmatter import write_frontmatter_file
 from ..utils.lang import detect_lang, should_follow
+
+
+def parse_urls(text: str) -> list[str]:
+    """从文本中提取所有有效 URL。
+
+    支持三种分隔方式：
+    - 逗号 / 分号分隔
+    - 换行符分隔
+    - 以 http:// 或 https:// 开头自动识别（无分隔符时）
+    """
+    # 先用逗号、分号、换行统一切分
+    parts = re.split(r"[,;\n]+", text)
+    urls = []
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        # 检测是否包含多个 https:// 粘在一起（无分隔符）
+        sub = re.split(r"(?=https?://)", part)
+        for u in sub:
+            u = u.strip()
+            if u.startswith(("http://", "https://")):
+                urls.append(u)
+    return urls
 
 
 def _url_to_subfolder(seed_url: str) -> str:
@@ -237,4 +262,71 @@ class WebExtractor(BaseExtractor):
             path=out_path, content=markdown, source=url, type="web",
         )
         reg.mark(url, "done", output_file=f"{subfolder}/{filename}", content_hash=content_hash)
+        return out_path
+
+    def extract_batch(self, urls: list[str], folder_name: str) -> list[Path]:
+        """批量提取多个指定 URL，全部输出到 raw/{folder_name}/ 目录。
+
+        每个 URL 单独抓取（不做 BFS 整站爬取），结果文件放在同一个自定义目录下。
+        文件名按 URL 路径段生成，与整站爬取的命名规则一致。
+        """
+        return asyncio.run(self._batch_async(urls, folder_name))
+
+    async def _batch_async(self, urls: list[str], folder_name: str) -> list[Path]:
+        """异步批量提取，返回成功写入的文件路径列表。"""
+        from crawl4ai import AsyncWebCrawler
+
+        output_dir = self.config.output_dir
+        sub_dir = output_dir / folder_name
+        sub_dir.mkdir(parents=True, exist_ok=True)
+        reg = Registry(output_dir / ".processed.json")
+        results: list[Path] = []
+
+        async with AsyncWebCrawler(verbose=False) as crawler:
+            for url in urls:
+                url = url.strip()
+                if url:
+                    out = await self._fetch_one(url, sub_dir, folder_name, reg, crawler)
+                    if out:
+                        results.append(out)
+
+        self.log(f"批量提取完成：{len(results)}/{len(urls)} 成功 → raw/{folder_name}/")
+        return results
+
+    async def _fetch_one(
+        self, url: str, sub_dir: Path, folder_name: str, reg: Registry, crawler
+    ) -> Path | None:
+        """提取单条 URL 到 sub_dir，返回写入路径；跳过/失败返回 None。"""
+        output_dir = self.config.output_dir
+        # 增量跳过：已处理且非强制
+        if not self.config.force and reg.is_processed(url):
+            self.log(f"[跳过] 已处理: {url}")
+            entry = next((e for e in reg.get_by_status("done") if e["source"] == url), None)
+            if entry and entry.get("output_file"):
+                return output_dir / entry["output_file"]
+            return None
+
+        result = await crawler.arun(url=url)
+        if not result.success:
+            self.log(f"[失败] {url}")
+            reg.mark(url, "failed", error="crawl4ai 返回失败")
+            return None
+
+        # 文件名：URL 路径 slug
+        slug = urlparse(url).path.strip("/").replace("/", "__") or "index"
+        filename = f"{slug[:80]}.md"
+        out_path = sub_dir / filename
+
+        content = result.markdown or ""
+        new_hash = hashlib.sha256(content.encode()).hexdigest()[:8]
+        existing = reg._data.get(url, {})
+        if not self.config.force and existing.get("content_hash") == new_hash and out_path.exists():
+            self.log(f"[无变化] {url}")
+            return out_path
+
+        content_hash = write_frontmatter_file(
+            path=out_path, content=content, source=url, type="web",
+        )
+        reg.mark(url, "done", output_file=f"{folder_name}/{filename}", content_hash=content_hash)
+        self.log(f"[完成] {url} → {folder_name}/{filename}")
         return out_path
