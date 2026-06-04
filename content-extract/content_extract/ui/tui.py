@@ -122,10 +122,11 @@ class ExtractRequested(Message):
 
 class ExtractBatchRequested(Message):
     """用户输入多个 URL 时发出，批量抓取到自定义目录。"""
-    def __init__(self, urls: list[str], folder_name: str, update_wiki: bool = False) -> None:
+    def __init__(self, urls: list[str], folder_name: str, source_type: str = "web", update_wiki: bool = False) -> None:
         super().__init__()
         self.urls = urls
         self.folder_name = folder_name
+        self.source_type = source_type
         self.update_wiki = update_wiki
 
 
@@ -311,6 +312,16 @@ class WikiModal(ModalScreen):
 class AddSourcePanel(Static):
     """左侧输入面板：支持单 URL 或多 URL 批量输入。"""
 
+    # 支持批量输入的类型（auto 根据 URL 自动判断）
+    _BATCH_SUPPORTED = frozenset({"auto", "web", "video", "article", "docs"})
+
+    # 组件 ID 常量
+    _ID_TEXTAREA    = "url-textarea"
+    _ID_TYPE_SELECT = "type-select"
+    _ID_BATCH_HINT  = "batch-hint"
+    _ID_FOLDER_HINT = "folder-hint"
+    _ID_FOLDER_INPUT = "folder-input"
+
     DEFAULT_CSS = """
     AddSourcePanel {
         width: 60%;
@@ -331,6 +342,8 @@ class AddSourcePanel(Static):
     AddSourcePanel #folder-input { width: 1fr; }
     AddSourcePanel #folder-hint { color: $error; display: none; }
     AddSourcePanel #folder-hint.visible { display: block; }
+    AddSourcePanel #batch-hint { color: $warning; display: none; margin-bottom: 1; }
+    AddSourcePanel #batch-hint.visible { display: block; }
     AddSourcePanel Horizontal { height: auto; }
     AddSourcePanel Button { margin-right: 1; }
     """
@@ -339,89 +352,124 @@ class AddSourcePanel(Static):
     _TYPE_OPTIONS = [
         ("自动识别", "auto"),
         ("web 网页", "web"),
-        ("video 视频", "video"),
-        ("ebook 电子书", "ebook"),
-        ("code 代码", "code"),
-        ("docs 文档", "docs"),
-        ("github 仓库", "github"),
+        ("video 视频（Bilibili）", "video"),
         ("article 单篇文章", "article"),
+        ("docs 本地文档", "docs"),
+        ("ebook 电子书（不支持批量）", "ebook"),
+        ("code 代码工程（不支持批量）", "code"),
+        ("github 仓库（不支持批量）", "github"),
     ]
 
     def compose(self) -> ComposeResult:
-        yield Label("URL / 路径（多个 URL 用逗号、分号或换行分隔）：")
-        yield TextArea(id="url-textarea", language=None)
+        yield Label("URL / 路径（多个用逗号、分号或换行分隔）：")
+        yield TextArea(id=self._ID_TEXTAREA, language=None)
         yield Label("来源类型：")
-        yield Select(options=self._TYPE_OPTIONS, value="auto", id="type-select")
-        yield Checkbox("整站爬取（web 类型时生效，仅对单 URL 有效）", value=True, id="crawl-checkbox")
-        # 自定义文件夹名（多 URL 时必填）
+        yield Select(options=self._TYPE_OPTIONS, value="auto", id=self._ID_TYPE_SELECT)
+        yield Label("ℹ ebook / code / github 不支持批量输入，请单条使用", id=self._ID_BATCH_HINT)
+        yield Checkbox("整站爬取（web 类型单 URL 时生效）", value=True, id="crawl-checkbox")
         with Horizontal(id="folder-row"):
             yield Label("保存目录名：", id="folder-label")
-            yield Input(placeholder="自定义（多 URL 时必填）", id="folder-input")
-        yield Label("⚠ 多 URL 批量模式下目录名为必填项", id="folder-hint")
+            yield Input(placeholder="自定义（多 URL 时必填）", id=self._ID_FOLDER_INPUT)
+        yield Label("⚠ 多 URL 批量模式下目录名为必填项", id=self._ID_FOLDER_HINT)
         with Horizontal():
             yield Button("提取", id="btn-extract", variant="primary")
             yield Button("提取并更新 Wiki", id="btn-extract-wiki")
 
     def _parse_urls(self, text: str) -> list[str]:
-        """从输入文本解析 URL 列表。"""
         from ..extractors.web import parse_urls
         return parse_urls(text)
 
-    def on_text_area_changed(self, event: TextArea.Changed) -> None:
-        """输入变化时检测多 URL 模式并更新提示。"""
-        if event.text_area.id != "url-textarea":
+    def _is_batch_mode(self) -> bool:
+        """当前类型支持批量且已输入多个 URL。"""
+        raw_type = str(self.query_one(f"#{self._ID_TYPE_SELECT}", Select).value)
+        if raw_type not in self._BATCH_SUPPORTED:
+            return False
+        return len(self._parse_urls(self.query_one(f"#{self._ID_TEXTAREA}", TextArea).text)) > 1
+
+    def _set_hint_visibility(self, batch: bool, folder: bool) -> None:
+        """统一控制两个提示 Label 的显示/隐藏。"""
+        bh = self.query_one(f"#{self._ID_BATCH_HINT}", Label)
+        fh = self.query_one(f"#{self._ID_FOLDER_HINT}", Label)
+        bh.add_class("visible") if batch else bh.remove_class("visible")
+        fh.add_class("visible") if folder else fh.remove_class("visible")
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        """类型切换时更新批量提示可见性。"""
+        if event.select.id != self._ID_TYPE_SELECT:
             return
-        urls = self._parse_urls(event.text_area.text)
-        hint = self.query_one("#folder-hint", Label)
-        if len(urls) > 1:
-            hint.add_class("visible")
+        not_supported = str(event.value) not in self._BATCH_SUPPORTED
+        if not_supported:
+            self._set_hint_visibility(batch=True, folder=False)
         else:
-            hint.remove_class("visible")
+            self._set_hint_visibility(batch=False, folder=self._is_batch_mode())
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        """输入变化时更新多 URL 提示。"""
+        if event.text_area.id != self._ID_TEXTAREA:
+            return
+        raw_type = str(self.query_one(f"#{self._ID_TYPE_SELECT}", Select).value)
+        is_multi = len(self._parse_urls(event.text_area.text)) > 1
+        not_supported = raw_type not in self._BATCH_SUPPORTED
+        self._set_hint_visibility(
+            batch=(not_supported and is_multi),
+            folder=(is_multi and not not_supported),
+        )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id not in ("btn-extract", "btn-extract-wiki"):
             return
 
-        textarea = self.query_one("#url-textarea", TextArea)
-        type_select = self.query_one("#type-select", Select)
+        textarea = self.query_one(f"#{self._ID_TEXTAREA}", TextArea)
+        type_select = self.query_one(f"#{self._ID_TYPE_SELECT}", Select)
         crawl_checkbox = self.query_one("#crawl-checkbox", Checkbox)
-        folder_input = self.query_one("#folder-input", Input)
+        folder_input = self.query_one(f"#{self._ID_FOLDER_INPUT}", Input)
 
         text = textarea.text.strip()
         if not text:
             return
 
-        urls = self._parse_urls(text)
+        raw_type = str(type_select.value)
         update_wiki = event.button.id == "btn-extract-wiki"
         folder_name = folder_input.value.strip()
+        urls = self._parse_urls(text)
+        is_multi = len(urls) > 1
 
-        if len(urls) > 1:
+        # 不支持批量的类型：只取第一个 URL/路径
+        if raw_type not in self._BATCH_SUPPORTED:
+            source = urls[0] if urls else text
+            source_type = detect_source_type(source) if raw_type == "auto" else raw_type
+            self.post_message(ExtractRequested(
+                source=source, source_type=source_type,
+                update_wiki=update_wiki, crawl=False,
+            ))
+            textarea.clear()
+            return
+
+        if is_multi:
             # 多 URL 批量模式：folder_name 必填
             if not folder_name:
-                hint = self.query_one("#folder-hint", Label)
-                hint.add_class("visible")
+                self.query_one("#folder-hint", Label).add_class("visible")
                 return
+            source_type = raw_type if raw_type != "auto" else "web"
             self.post_message(ExtractBatchRequested(
-                urls=urls,
-                folder_name=folder_name,
-                update_wiki=update_wiki,
+                urls=urls, folder_name=folder_name,
+                source_type=source_type, update_wiki=update_wiki,
             ))
         else:
-            # 单 URL 模式：沿用原有逻辑
+            # 单 URL 模式
             source = urls[0] if urls else text
-            raw_type = str(type_select.value)
             source_type = detect_source_type(source) if raw_type == "auto" else raw_type
             crawl = bool(crawl_checkbox.value)
             self.post_message(ExtractRequested(
-                source=source,
-                source_type=source_type,
-                update_wiki=update_wiki,
-                crawl=crawl,
+                source=source, source_type=source_type,
+                update_wiki=update_wiki, crawl=crawl,
             ))
 
-        # 清空输入
         textarea.clear()
         folder_input.value = ""
+
+
+# ── 处理队列面板 ──────────────────────────────────────────────────────────────
 
 
 # ── 处理队列面板 ──────────────────────────────────────────────────────────────
@@ -1132,36 +1180,65 @@ class TUIApp(App):
 
     def on_extract_batch_requested(self, event: ExtractBatchRequested) -> None:
         """处理批量 URL 提取请求：创建任务记录并启动 worker。"""
-        # 用 folder_name 作为 source 标识
         source_key = f"batch::{event.folder_name}"
         existing = next((t for t in self._tasks if t.source == source_key), None)
         if existing:
             existing.status = "extracting"
+            existing.source_type = event.source_type
             existing.error = ""
         else:
             self._tasks.append(TaskEntry(
                 source=source_key,
-                source_type="web",
+                source_type=event.source_type,
                 status="extracting",
             ))
         self._refresh_queue()
-        self.log_message(f"开始批量提取 {len(event.urls)} 个 URL → raw/{event.folder_name}/")
-        self._run_extract_batch(event.urls, event.folder_name, event.update_wiki)
+        self.log_message(
+            f"开始批量提取 [{event.source_type}] {len(event.urls)} 个 URL → raw/{event.folder_name}/"
+        )
+        self._run_extract_batch(event.urls, event.folder_name, event.source_type, event.update_wiki)
 
     @work(thread=True)
-    def _run_extract_batch(self, urls: list[str], folder_name: str, update_wiki: bool) -> None:
-        """在独立线程批量提取多个 URL 到自定义目录。"""
+    @work(thread=True)
+    def _run_extract_batch(self, urls: list[str], folder_name: str, source_type: str, update_wiki: bool) -> None:
+        """在独立线程批量提取多个 URL 到自定义目录，根据 source_type 路由到对应提取器。"""
         def on_progress(msg: str) -> None:
             self.call_from_thread(self.log_message, msg)
 
         source_key = f"batch::{folder_name}"
         try:
             from ..extractors.base import ExtractConfig
-            from ..extractors.web import WebExtractor
             cfg = ExtractConfig(output_dir=_RAW_DIR, cookies=self._cookies)
-            extractor = WebExtractor(config=cfg, on_progress=on_progress)
-            results = extractor.extract_batch(urls, folder_name)
-            # 用第一个成功的文件路径作为代表
+            results: list = []
+
+            if source_type in ("web", "article"):
+                # web 和 article 都用 WebExtractor 单页抓取
+                from ..extractors.web import WebExtractor
+                extractor = WebExtractor(config=cfg, on_progress=on_progress)
+                results = extractor.extract_batch(urls, folder_name)
+
+            elif source_type == "video":
+                # video：逐条调用 auto_detect_video（Bilibili）
+                from ..extractors import auto_detect_video
+                for url in urls:
+                    try:
+                        out = auto_detect_video(url, config=cfg)
+                        results.append(out)
+                        on_progress(f"[完成] {url} → {out.name}")
+                    except Exception as err:
+                        on_progress(f"[失败] {url}：{err}")
+
+            elif source_type == "docs":
+                # docs：本地文档路径，逐条处理（Phase 2 实现后替换为 local_docs 提取器）
+                on_progress(f"[提示] docs 批量提取将在 Phase 2 实现，当前跳过 {len(urls)} 个路径")
+
+            else:
+                self.post_message(ExtractDone(
+                    source=source_key, success=False,
+                    error=f"类型 [{source_type}] 不支持批量模式"
+                ))
+                return
+
             out_file = str(results[0]) if results else f"raw/{folder_name}/"
             self.post_message(ExtractDone(source=source_key, success=True, output_file=out_file))
             if update_wiki:
