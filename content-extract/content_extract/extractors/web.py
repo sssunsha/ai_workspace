@@ -197,6 +197,8 @@ class WebExtractor(BaseExtractor):
                 f"队列中还有约 {remaining} 个待处理 URL，可再次运行继续抓取"
             )
         else:
+            # 队列耗尽：真正完成，把所有 done_partial 升级为 done 并清除 queue_remaining
+            reg.mark_all_done(subfolder_name)
             self.log(f"整站爬取完成，共 {len(results)} 页 → {subfolder_dir}/（队列已全部处理）")
         return results[0] if results else subfolder_dir / "index.md"
 

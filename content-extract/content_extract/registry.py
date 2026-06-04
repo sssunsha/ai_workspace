@@ -43,6 +43,22 @@ class Registry:
             self.save()
         return len(to_remove)
 
+    def mark_all_done(self, output_prefix: str) -> None:
+        """将某子目录下所有 done_partial 记录升级为 done，并清除 queue_remaining。
+
+        整站爬取队列耗尽（真正完成）时调用，确保进度显示正确。
+        """
+        changed = False
+        for v in self._data.values():
+            output_file = v.get("output_file", "")
+            if output_file.startswith(output_prefix + "/") or output_file == output_prefix:
+                if v.get("status") == "done_partial":
+                    v["status"] = "done"
+                    v.pop("queue_remaining", None)
+                    changed = True
+        if changed:
+            self.save()
+
     def mark_partial(self, output_prefix: str, queue_remaining: int) -> None:
         """将某子目录下所有 done 记录升级为 done_partial，并记录剩余队列数。
 
