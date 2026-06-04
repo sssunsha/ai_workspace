@@ -494,13 +494,15 @@ class QueuePanel(Static):
     """
 
     def compose(self) -> ComposeResult:
-        table = DataTable(id="queue-table", zebra_stripes=True)
+        table = DataTable(id="queue-table", zebra_stripes=True, cursor_type="row")
         table.add_columns("状态", "类型", "来源", "进度", "时间")
         yield table
+        yield Label("双击来源行可在 Finder 中打开对应目录", id="queue-tip")
         yield Label("", id="queue-summary")
 
     def refresh_table(self, tasks: list[TaskEntry]) -> None:
         """清空并重绘队列表格，同时更新底部统计摘要。"""
+        self._tasks = tasks  # 保留引用供双击使用
         table = self.query_one("#queue-table", DataTable)
         table.clear()
         for t in tasks:
@@ -539,6 +541,56 @@ class QueuePanel(Static):
         status_str = "  ".join(parts)
         type_str = "  ".join(f"{k}:{v}" for k, v in sorted(type_counts.items()))
         return f"{status_str}\n{type_str}" if type_str else status_str
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._tasks: list[TaskEntry] = []
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """双击或 Enter 选中行时，在 Finder 中打开对应目录。"""
+        row = event.cursor_row
+        if row < 0 or row >= len(self._tasks):
+            return
+        task = self._tasks[row]
+        self._open_in_finder(task)
+
+    def _open_in_finder(self, task: TaskEntry) -> None:
+        """根据 task.output_file 推断目录路径并用 Finder 打开。"""
+        target = self._resolve_target_dir(task)
+        import subprocess
+        subprocess.Popen(["open", str(target)])
+
+    def _resolve_target_dir(self, task: TaskEntry) -> Path:
+        """从 TaskEntry 推断要打开的目录，找不到则回退到 raw 根目录。"""
+        output_file = task.output_file or ""
+        if output_file:
+            return self._dir_from_output_file(output_file)
+        if not task.source.startswith("batch::"):
+            candidate = self._dir_from_source_url(task.source)
+            if candidate is not None:
+                return candidate
+        return _RAW_DIR
+
+    def _dir_from_output_file(self, output_file: str) -> Path:
+        """从 output_file 字段（subfolder/file.md）推断子目录。"""
+        subfolder = output_file.split("/")[0]
+        candidate = _RAW_DIR / subfolder
+        if candidate.is_dir():
+            return candidate
+        full = _RAW_DIR / output_file
+        if full.exists():
+            return full.parent
+        return _RAW_DIR
+
+    @staticmethod
+    def _dir_from_source_url(source: str) -> Path | None:
+        """从 source URL 推断子目录名，不存在则返回 None。"""
+        try:
+            from ..extractors.web import _url_to_subfolder
+            candidate = _RAW_DIR / _url_to_subfolder(source)
+            return candidate if candidate.is_dir() else None
+        except Exception:
+            return None
 
 
 # ── 实时日志面板 ──────────────────────────────────────────────────────────────
