@@ -1478,15 +1478,17 @@ class TUIApp(App):
         self._refresh_queue()
 
     def _trigger_manual_transcribe(self, task: "TaskEntry") -> None:
-        """手动触发指定 video 任务的 Whisper 转录，在独立 worker 线程中运行。"""
+        """手动触发指定 video 任务的 Whisper 转录。"""
         output_dir = _RAW_DIR / task.output_file if task.output_file else _RAW_DIR
         self.log_message(f"[转录] 手动触发：{task.output_file or task.source}")
+        self._run_transcribe(output_dir)
 
-        @self.work(thread=True)
-        def _run() -> None:
-            def on_progress(msg: str) -> None:
-                self.call_from_thread(self.log_message, msg)
-            self._auto_transcribe(output_dir, on_progress)
+    @work(thread=True)
+    def _run_transcribe(self, output_dir: Path) -> None:
+        """在独立线程执行转录，通过 call_from_thread 回调日志。"""
+        def on_progress(msg: str) -> None:
+            self.call_from_thread(self.log_message, msg)
+        self._auto_transcribe(output_dir, on_progress)
 
     def action_show_help(self) -> None:
         """显示操作手册弹窗。"""
