@@ -930,21 +930,33 @@ class TUIApp(App):
             pass
 
     def _load_registry(self) -> None:
-        """从 ./raw/.processed.json 加载并聚合历史任务记录。
+        """从 raw/.processed.json 及各子目录的 .processed.json 加载并聚合历史任务记录。
 
         整站爬取（output_file 在子目录下）按子目录合并为一条；
         单页提取保持一对一。
         """
-        registry_path = _REGISTRY_PATH
-        if not registry_path.exists():
+        if not _RAW_DIR.exists():
             return
         try:
             from ..registry import Registry
-            reg = Registry(registry_path)
-            all_entries = [
-                e for status in ("done", "done_partial", "failed", "needs_transcription")
-                for e in reg.get_by_status(status)
-            ]
+            all_entries: list[dict] = []
+            statuses = ("done", "done_partial", "failed", "needs_transcription")
+
+            # 根 registry
+            if _REGISTRY_PATH.exists():
+                reg = Registry(_REGISTRY_PATH)
+                for e in (e for s in statuses for e in reg.get_by_status(s)):
+                    all_entries.append(e)
+
+            # 子目录 registry — output_file 补子目录前缀，让 _group_entries 能聚合
+            for sub_reg_path in sorted(_RAW_DIR.glob("*/.processed.json")):
+                subdir = sub_reg_path.parent.name
+                reg = Registry(sub_reg_path)
+                for e in (e for s in statuses for e in reg.get_by_status(s)):
+                    if e.get("output_file"):
+                        e = {**e, "output_file": f"{subdir}/{e['output_file']}"}
+                    all_entries.append(e)
+
             groups = self._group_entries(all_entries)
             for g in groups.values():
                 self._tasks.append(self._build_task_entry(g))
@@ -998,7 +1010,14 @@ class TUIApp(App):
             (e.get("queue_remaining", 0) or 0 for e in entries),
             default=0,
         )
-        total_estimate = (page_count + queue_remaining) if queue_remaining > 0 else 0
+        all_done = all(e.get("status") == "done" for e in entries)
+        if queue_remaining > 0:
+            total_estimate = page_count + queue_remaining
+        elif all_done and page_count > 1:
+            # 全部完成且无未知剩余，用实际页数作为总数显示 N/N
+            total_estimate = page_count
+        else:
+            total_estimate = 0
 
         return TaskEntry(
             source=seed,
