@@ -293,6 +293,10 @@ class RecordActionModal(ModalScreen[str]):
                 yield Button("继续抓取", id="btn-resume", variant="primary")
                 yield Button("强制更新", id="btn-force", variant="warning")
                 yield Button("清空记录", id="btn-clear", variant="error")
+            # video 类型额外显示手动转录按钮
+            if t.source_type and "video" in t.source_type:
+                with Horizontal():
+                    yield Button("手动转录", id="btn-transcribe", variant="success")
             # 第二行：取消按钮单独一行，居中
             with Horizontal():
                 yield Button("取消", id="btn-cancel")
@@ -1452,6 +1456,8 @@ class TUIApp(App):
                     crawl=(task.source_type == "web" and task.page_count > 1),
                     force=True,
                 ))
+            elif choice == "btn-transcribe":
+                self._trigger_manual_transcribe(task)
 
         self.push_screen(RecordActionModal(task), handle_action)
 
@@ -1470,6 +1476,17 @@ class TUIApp(App):
             self.log_message(f"[yellow]清空 registry 记录失败：{e}[/yellow]")
         self._tasks = [t for t in self._tasks if t.source != task.source]
         self._refresh_queue()
+
+    def _trigger_manual_transcribe(self, task: "TaskEntry") -> None:
+        """手动触发指定 video 任务的 Whisper 转录，在独立 worker 线程中运行。"""
+        output_dir = _RAW_DIR / task.output_file if task.output_file else _RAW_DIR
+        self.log_message(f"[转录] 手动触发：{task.output_file or task.source}")
+
+        @self.work(thread=True)
+        def _run() -> None:
+            def on_progress(msg: str) -> None:
+                self.call_from_thread(self.log_message, msg)
+            self._auto_transcribe(output_dir, on_progress)
 
     def action_show_help(self) -> None:
         """显示操作手册弹窗。"""
