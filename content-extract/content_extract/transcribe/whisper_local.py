@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
+
+# HuggingFace 在中国大陆被墙，自动走镜像站
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
 
 @dataclass
@@ -41,4 +45,10 @@ def transcribe(audio_path: Path, cfg: WhisperConfig | None = None) -> str:
             m, s = divmod(int(seg.start), 60)
             lines.append(f"[{m:02d}:{s:02d}] {seg.text.strip()}")
 
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    try:
+        import zhconv
+        result = zhconv.convert(result, "zh-hans")
+    except ImportError:
+        pass
+    return result

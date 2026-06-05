@@ -1215,6 +1215,7 @@ class TUIApp(App):
             elif source_type in ("video", "bilibili"):
                 from ..extractors import auto_detect_video
                 out = auto_detect_video(source, config=cfg)
+                self._auto_transcribe(cfg.output_dir, on_progress)
             else:
                 self.post_message(ExtractDone(
                     source=source, success=False,
@@ -1270,15 +1271,20 @@ class TUIApp(App):
                 results = extractor.extract_batch(urls, folder_name)
 
             elif source_type == "video":
-                # video：逐条调用 auto_detect_video（Bilibili）
+                # video：逐条调用 auto_detect_video（Bilibili），输出到 raw/<folder_name>/
                 from ..extractors import auto_detect_video
+                video_cfg = ExtractConfig(
+                    output_dir=_RAW_DIR / folder_name,
+                    cookies=self._cookies,
+                )
                 for url in urls:
                     try:
-                        out = auto_detect_video(url, config=cfg)
+                        out = auto_detect_video(url, config=video_cfg)
                         results.append(out)
                         on_progress(f"[完成] {url} → {out.name}")
                     except Exception as err:
                         on_progress(f"[失败] {url}：{err}")
+                self._auto_transcribe(video_cfg.output_dir, on_progress)
 
             elif source_type == "docs":
                 # docs：本地文档路径，逐条处理（Phase 2 实现后替换为 local_docs 提取器）
@@ -1297,6 +1303,39 @@ class TUIApp(App):
                 self.call_from_thread(self.push_screen, WikiModal())
         except Exception as e:
             self.post_message(ExtractDone(source=source_key, success=False, error=str(e)))
+
+    def _auto_transcribe(self, output_dir: Path, on_progress) -> None:
+        """提取完成后，若目录中有 needs_transcription 条目则自动触发 Whisper 转录。"""
+        from ..registry import Registry
+        from ..transcribe.queue import process_queue
+        from ..config import load_config
+
+        reg = Registry(output_dir / ".processed.json")
+        pending = reg.get_by_status("needs_transcription")
+        needs_file = output_dir / "needs_transcription.txt"
+        if needs_file.exists():
+            existing = {e["source"] for e in pending}
+            for line in needs_file.read_text(encoding="utf-8").splitlines():
+                url = line.strip()
+                if url and url not in existing:
+                    pending.append({"source": url})
+
+        if not pending:
+            return
+
+        raw_cfg = load_config()
+        w = raw_cfg.get("whisper", {})
+        on_progress(f"[转录] 开始自动转录 {len(pending)} 个视频（模型: {w.get('model', 'medium')}）…")
+        try:
+            process_queue(
+                output_dir=output_dir,
+                model=w.get("model", "medium"),
+                device=w.get("device", "cpu"),
+                compute_type=w.get("compute_type", "int8"),
+            )
+            on_progress("[转录] 自动转录完成")
+        except Exception as e:
+            on_progress(f"[转录] 失败: {e}")
 
     def action_record_action(self) -> None:
         """对队列表格中当前选中行的记录弹出操作菜单。"""

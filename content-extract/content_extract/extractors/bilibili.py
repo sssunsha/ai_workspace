@@ -1,32 +1,83 @@
 from __future__ import annotations
 
-import json
 import re
-import shutil
-import subprocess
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from .base import BaseExtractor, ExtractConfig
 from ..registry import Registry
 from ..utils.frontmatter import write_frontmatter_file
 
 
-def _ytdlp_json(url: str, cookie_file: str | None) -> dict:
+_BILIBILI_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Referer": "https://www.bilibili.com",
+}
+
+
+def _youtube_dl_class() -> Any:
+    try:
+        from yt_dlp import YoutubeDL
+        return YoutubeDL
+    except ImportError as exc:
+        raise RuntimeError("yt-dlp 未安装，请运行: pip install yt-dlp") from exc
+
+
+def _bv_from_url(url: str) -> str | None:
+    """从 URL 中提取 BV 号，失败返回 None。"""
+    m = re.search(r"/(BV[a-zA-Z0-9]+)", url)
+    return m.group(1) if m else None
+
+
+def _extract_info(url: str, cookie_file: str | None) -> dict:
+    ydl_cls = _youtube_dl_class()
+    opts: dict[str, Any] = {
+        "skip_download": True,
+        "quiet": True,
+        "no_warnings": True,
+        "http_headers": _BILIBILI_HEADERS,
+    }
     if cookie_file:
-        cmd = ["yt-dlp", "--cookies", cookie_file, "--skip-download", "-J", url]
-    else:
-        cmd = ["yt-dlp", "--skip-download", "-J", url]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode == 0:
-        return json.loads(r.stdout)
-    # yt-dlp 失败时记录错误信息便于诊断
-    print(f"[警告] yt-dlp 失败: {r.stderr[:200]}")
-    return {}
+        opts["cookiefile"] = cookie_file
+    try:
+        with ydl_cls(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            return ydl.sanitize_info(info) or {}
+    except Exception as e:
+        print(f"[警告] yt-dlp 获取元数据失败: {e}")
+        return {}
+
+
+def _download_subtitles(url: str, cookie_file: str | None, tmp_dir: Path) -> list[Path]:
+    """用 yt-dlp Python API 下载 SRT 字幕到 tmp_dir，返回 .srt 文件列表。"""
+    ydl_cls = _youtube_dl_class()
+    opts: dict[str, Any] = {
+        "skip_download": True,
+        "writesubtitles": True,
+        "writeautomaticsub": True,
+        "subtitleslangs": ["zh-Hans", "zh"],
+        "convertsubtitles": "srt",
+        "quiet": True,
+        "no_warnings": True,
+        "outtmpl": str(tmp_dir / "%(id)s.%(ext)s"),
+        "http_headers": _BILIBILI_HEADERS,
+    }
+    if cookie_file:
+        opts["cookiefile"] = cookie_file
+    try:
+        with ydl_cls(opts) as ydl:
+            ydl.download([url])
+    except Exception:
+        pass
+    return list(tmp_dir.glob("*.srt"))
 
 
 def _parse_srt(srt_text: str) -> list[tuple[str, str]]:
-    """解析 SRT 文件，返回 [(时间戳, 文本)] 列表。"""
     blocks = re.split(r"\n{2,}", srt_text.strip())
     result = []
     for block in blocks:
@@ -81,9 +132,11 @@ class BilibiliExtractor(BaseExtractor):
 
         cookie_file = self._resolve_cookie()
         self.log(f"[Bilibili] 获取元数据: {source}")
-        meta = _ytdlp_json(source, cookie_file)
-        vid = meta.get("id", "unknown")
-        title = meta.get("title", vid)
+        meta = _extract_info(source, cookie_file)
+
+        # 元数据获取失败时用 BV 号作为 fallback id，避免多视频覆盖同一 unknown.md
+        vid = meta.get("id") or _bv_from_url(source) or "unknown"
+        title = meta.get("title") or vid
         transcript = self._get_subtitle(source, vid, cookie_file)
 
         body = self._build_body(meta, title, transcript)
@@ -105,7 +158,6 @@ class BilibiliExtractor(BaseExtractor):
         return out_path
 
     def _resolve_cookie(self) -> str | None:
-        """解析并校验 Bilibili Cookie 路径，不存在时返回 None 并打印警告。"""
         cookie = self.config.cookies.get("bilibili")
         if not cookie:
             return None
@@ -116,8 +168,7 @@ class BilibiliExtractor(BaseExtractor):
         return str(path)
 
     def _build_body(self, meta: dict, title: str, transcript: str | None) -> str:
-        """组装 Bilibili 视频的正文 Markdown。"""
-        duration = meta.get("duration") or 0
+        duration = int(meta.get("duration") or 0)
         chapters = meta.get("chapters") or []
         lines = [
             f"# {title}\n",
@@ -135,7 +186,6 @@ class BilibiliExtractor(BaseExtractor):
         return "\n".join(lines)
 
     def _append_needs_transcription(self, output_dir: Path, source: str) -> None:
-        """将 source 追加到 needs_transcription.txt，已存在则跳过。"""
         needs_file = output_dir / "needs_transcription.txt"
         existing = needs_file.read_text(encoding="utf-8").splitlines() if needs_file.exists() else []
         if source not in existing:
@@ -143,26 +193,14 @@ class BilibiliExtractor(BaseExtractor):
                 f.write(f"{source}\n")
 
     def _get_subtitle(self, url: str, video_id: str, cookie_file: str | None) -> str | None:
-        """下载 SRT 字幕并清洗，返回格式化文本。无字幕返回 None。"""
         tmp_dir = Path(tempfile.mkdtemp(prefix=f"bili_{video_id}_"))
         try:
-            if cookie_file:
-                cmd = ["yt-dlp", "--cookies", cookie_file,
-                       "--skip-download", "--write-auto-sub", "--write-sub",
-                       "--sub-lang", "zh-Hans,zh", "--convert-subs", "srt",
-                       "-o", str(tmp_dir / "%(id)s"), url]
-            else:
-                cmd = ["yt-dlp", "--skip-download", "--write-auto-sub", "--write-sub",
-                       "--sub-lang", "zh-Hans,zh", "--convert-subs", "srt",
-                       "-o", str(tmp_dir / "%(id)s"), url]
-            subprocess.run(cmd, capture_output=True)
-
-            srt_files = list(tmp_dir.glob("*.srt"))
+            srt_files = _download_subtitles(url, cookie_file, tmp_dir)
             if not srt_files:
                 return None
-
             entries = _parse_srt(srt_files[0].read_text(encoding="utf-8"))
             entries = _dedupe_adjacent(entries)
             return "\n".join(f"{ts} {text}" for ts, text in entries)
         finally:
+            import shutil
             shutil.rmtree(tmp_dir, ignore_errors=True)

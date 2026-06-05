@@ -1,11 +1,58 @@
 from __future__ import annotations
 
-import subprocess
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from .whisper_local import WhisperConfig, transcribe
 from ..registry import Registry
+
+
+def _youtube_dl_class() -> Any:
+    try:
+        from yt_dlp import YoutubeDL
+        return YoutubeDL
+    except ImportError as exc:
+        raise RuntimeError("yt-dlp 未安装，请运行: pip install yt-dlp") from exc
+
+
+_BILIBILI_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Referer": "https://www.bilibili.com",
+}
+
+
+def _get_video_id(url: str) -> str | None:
+    ydl_cls = _youtube_dl_class()
+    opts = {"skip_download": True, "quiet": True, "no_warnings": True, "http_headers": _BILIBILI_HEADERS}
+    with ydl_cls(opts) as ydl:
+        try:
+            info = ydl.extract_info(url, download=False)
+            return ydl.sanitize_info(info).get("id")
+        except Exception:
+            return None
+
+
+def _download_audio(url: str, audio_path: Path) -> bool:
+    ydl_cls = _youtube_dl_class()
+    opts: dict[str, Any] = {
+        "format": "bestaudio/best",
+        "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "5"}],
+        "outtmpl": str(audio_path.with_suffix("")),
+        "quiet": True,
+        "no_warnings": True,
+        "http_headers": _BILIBILI_HEADERS,
+    }
+    try:
+        with ydl_cls(opts) as ydl:
+            ydl.download([url])
+        return audio_path.exists()
+    except Exception:
+        return False
 
 
 def process_queue(
@@ -23,7 +70,6 @@ def process_queue(
     reg = Registry(output_dir / ".processed.json")
     cfg = WhisperConfig(model=model, device=device, compute_type=compute_type)
 
-    # 从 registry 获取待处理列表
     pending = reg.get_by_status("needs_transcription")
 
     # 兼容旧格式 needs_transcription.txt
@@ -45,7 +91,6 @@ def process_queue(
         url = entry["source"]
         _transcribe_one(url, entry.get("output_file"), output_dir, reg, cfg)
 
-    # 清空旧格式队列文件
     if needs_file.exists():
         needs_file.write_text("", encoding="utf-8")
 
@@ -57,27 +102,17 @@ def _transcribe_one(
     reg: Registry,
     cfg: WhisperConfig,
 ) -> None:
-    # 用 yt-dlp --print id 获取视频 ID，避免手工解析不同平台 URL
-    r_id = subprocess.run(
-        ["yt-dlp", "--skip-download", "--print", "id", url],
-        capture_output=True,
-        text=True,
-    )
-    if r_id.returncode != 0:
+    print(f"  获取视频信息: {url}")
+    vid = _get_video_id(url)
+    if not vid:
         print(f"  [失败] 无法获取 ID: {url}")
         reg.mark(url, "failed", error="yt-dlp 获取 ID 失败")
         return
 
-    vid = r_id.stdout.strip()
     audio_path = Path(tempfile.gettempdir()) / f"transcribe_{vid}.mp3"
 
     print(f"  下载音频: {url}")
-    r_dl = subprocess.run(
-        ["yt-dlp", "-x", "--audio-format", "mp3", "--audio-quality", "5",
-         "-o", str(audio_path), url],
-        capture_output=True,
-    )
-    if r_dl.returncode != 0 or not audio_path.exists():
+    if not _download_audio(url, audio_path):
         print(f"  [失败] 音频下载失败: {url}")
         reg.mark(url, "failed", error="音频下载失败")
         return
@@ -92,7 +127,6 @@ def _transcribe_one(
     finally:
         audio_path.unlink(missing_ok=True)
 
-    # 找到对应的 raw 文件（优先按 output_file，回退按 video ID 匹配文件名）
     raw_file = None
     if output_file:
         candidate = output_dir / output_file

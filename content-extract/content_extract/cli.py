@@ -6,9 +6,20 @@ from pathlib import Path
 from .config import load_config
 from .registry import Registry
 
+_PROJECT_MARKERS = ("pyproject.toml", "setup.py", "content-extract.toml", ".git")
+
+
+def _find_project_root(start: Path) -> Path:
+    """向上查找含有项目标志文件的目录，找不到则返回 start。"""
+    for p in [start, *start.parents]:
+        if any((p / m).exists() for m in _PROJECT_MARKERS):
+            return p
+    return start
+
+
 # 工具启动时的工作目录，作为所有相对路径的锚点
-# 防止用户在子目录里运行 content-extract 时路径错位
-_LAUNCH_DIR: Path = Path.cwd()
+# 从 cwd 向上找项目根，防止在 raw/ 子目录启动时路径嵌套
+_LAUNCH_DIR: Path = _find_project_root(Path.cwd())
 
 
 def get_raw_dir(output: str = "./raw") -> Path:

@@ -10,6 +10,7 @@ yt-dlp
 
 # transcription
 faster-whisper
+zhconv
 
 # dev/test
 pytest>=7.0
