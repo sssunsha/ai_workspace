@@ -30,7 +30,7 @@ def transcribe(audio_path: Path, cfg: WhisperConfig | None = None) -> str:
         cfg = WhisperConfig()
 
     model = WhisperModel(cfg.model, device=cfg.device, compute_type=cfg.compute_type)
-    segments, _info = model.transcribe(
+    segments, info = model.transcribe(
         str(audio_path),
         language=cfg.language,
         vad_filter=cfg.vad_filter,
@@ -38,12 +38,18 @@ def transcribe(audio_path: Path, cfg: WhisperConfig | None = None) -> str:
         condition_on_previous_text=False,
     )
 
+    duration = info.duration or 0
     lines = []
     for seg in segments:
-        # faster-whisper 内部已按 no_speech_threshold 过滤，此处只跳过空文本
         if seg.text.strip():
             m, s = divmod(int(seg.start), 60)
             lines.append(f"[{m:02d}:{s:02d}] {seg.text.strip()}")
+        # 实时进度输出，供 TUI 日志显示
+        if duration > 0:
+            pct = min(100, int(seg.end / duration * 100))
+            print(f"  转录进度: {pct}%", flush=True)
+        else:
+            print("  转录中...", flush=True)
 
     result = "\n".join(lines)
     try:
