@@ -253,7 +253,7 @@ class RecordActionModal(ModalScreen[str]):
         with Vertical():
             yield Label("记录操作")
             yield Label(
-                f"[bold]{t.source[:68]}[/bold]\n"
+                f"[bold]{(t.output_file or t.source)[:68]}[/bold]\n"
                 f"类型：{t.source_type or '—'}  状态：{status_label}{progress_str}"
             )
             # 第一行：操作按钮
@@ -507,7 +507,9 @@ class QueuePanel(Static):
         table.clear()
         for t in tasks:
             icon = _STATUS_ICONS.get(t.status, "?")
-            source_short = t.source[-35:] if len(t.source) > 35 else t.source
+            # 优先显示 output_file（子目录名或文件名），回退到 URL 尾部
+            display_name = t.output_file or t.source
+            source_short = display_name[-45:] if len(display_name) > 45 else display_name
             time_short = t.extracted_at[:10] if t.extracted_at else "—"
             # 整站任务显示"类型(页数)"，单页显示类型
             type_str = f"{t.source_type}({t.page_count})" if t.page_count > 1 else (t.source_type or "—")
