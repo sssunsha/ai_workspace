@@ -1418,15 +1418,25 @@ class TUIApp(App):
             f"model={model!r}, device={device!r}, compute_type={compute_type!r})"
         )
         try:
-            result = subprocess.run(
-                [sys.executable, "-c", script],
-                capture_output=False,
+            import subprocess
+            proc = subprocess.Popen(
+                [sys.executable, "-u", "-c", script],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 close_fds=True,
+                text=True,
+                bufsize=1,
             )
-            if result.returncode == 0:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                line = line.rstrip()
+                if line:
+                    on_progress(line)
+            proc.wait()
+            if proc.returncode == 0:
                 on_progress("[转录] 自动转录完成")
             else:
-                on_progress(f"[转录] 子进程退出码 {result.returncode}")
+                on_progress(f"[转录] 子进程退出码 {proc.returncode}")
         except Exception as e:
             on_progress(f"[转录] 失败: {e}")
 
