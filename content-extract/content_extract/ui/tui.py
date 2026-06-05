@@ -107,6 +107,38 @@ def detect_source_type(source: str) -> str:
     return "docs"
 
 
+def _reset_retryable_failures(reg_path: "Path", reg: "object") -> None:
+    """将因 fd 或下载失败的 failed 条目重置为 needs_transcription 以允许重试。"""
+    import json
+
+    _RETRYABLE = ("fds_to_keep", "音频下载失败")
+    retryable = [
+        e for e in reg.get_by_status("failed")
+        if any(kw in (e.get("error") or "") for kw in _RETRYABLE)
+    ]
+    if not retryable:
+        return
+    data = json.loads(reg_path.read_text(encoding="utf-8"))
+    for e in retryable:
+        entry = data.get(e["source"])
+        if entry:
+            entry["status"] = "needs_transcription"
+            entry.pop("error", None)
+    reg_path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def _append_from_needs_file(output_dir: "Path", pending: list) -> None:
+    """将 needs_transcription.txt 中不在 pending 里的 URL 追加进去。"""
+    needs_file = output_dir / "needs_transcription.txt"
+    if not needs_file.exists():
+        return
+    existing = {e["source"] for e in pending}
+    for line in needs_file.read_text(encoding="utf-8").splitlines():
+        url = line.strip()
+        if url and url not in existing:
+            pending.append({"source": url})
+
+
 # ── 消息定义 ──────────────────────────────────────────────────────────────────
 
 class ExtractRequested(Message):
@@ -1326,35 +1358,71 @@ class TUIApp(App):
             self.post_message(ExtractDone(source=source_key, success=False, error=str(e)))
 
     def _auto_transcribe(self, output_dir: Path, on_progress) -> None:
-        """提取完成后，若目录中有 needs_transcription 条目则自动触发 Whisper 转录。"""
-        from ..registry import Registry
-        from ..transcribe.queue import process_queue
+        """提取完成后，若目录中有待转录条目则自动触发 Whisper 转录。
+
+        通过独立子进程运行，避免 Textual 的 asyncio fd 被 ffmpeg 子进程继承
+        导致 'bad value(s) in fds_to_keep' 错误。
+        """
         from ..config import load_config
 
-        reg = Registry(output_dir / ".processed.json")
-        pending = reg.get_by_status("needs_transcription")
-        needs_file = output_dir / "needs_transcription.txt"
-        if needs_file.exists():
-            existing = {e["source"] for e in pending}
-            for line in needs_file.read_text(encoding="utf-8").splitlines():
-                url = line.strip()
-                if url and url not in existing:
-                    pending.append({"source": url})
-
+        pending = self._collect_transcription_pending(output_dir)
         if not pending:
             return
 
-        raw_cfg = load_config()
-        w = raw_cfg.get("whisper", {})
-        on_progress(f"[转录] 开始自动转录 {len(pending)} 个视频（模型: {w.get('model', 'medium')}）…")
+        w = load_config().get("whisper", {})
+        model = w.get("model", "medium")
+        on_progress(f"[转录] 开始自动转录 {len(pending)} 个视频（模型: {model}）…")
+        self._run_transcribe_subprocess(
+            output_dir=output_dir,
+            model=model,
+            device=w.get("device", "cpu"),
+            compute_type=w.get("compute_type", "int8"),
+            on_progress=on_progress,
+        )
+
+    @staticmethod
+    def _collect_transcription_pending(output_dir: Path) -> list:
+        """收集待转录条目，并将可重试的 failed 条目重置为 needs_transcription。"""
+        from ..registry import Registry
+
+        reg_path = output_dir / ".processed.json"
+        if not reg_path.exists():
+            return []
+
+        reg = Registry(reg_path)
+        _reset_retryable_failures(reg_path, reg)
+        pending = reg.get_by_status("needs_transcription")
+        _append_from_needs_file(output_dir, pending)
+        return pending
+
+    @staticmethod
+    def _run_transcribe_subprocess(
+        output_dir: Path, model: str, device: str, compute_type: str, on_progress
+    ) -> None:
+        """在独立子进程中执行 process_queue，close_fds=True 隔离 Textual fd。"""
+        import sys
+        import subprocess
+
+        project_root = str(output_dir.parent.parent)
+        script = (
+            "import sys, os; "
+            "os.environ.setdefault('HF_ENDPOINT', 'https://hf-mirror.com'); "
+            f"sys.path.insert(0, {project_root!r}); "
+            "from content_extract.transcribe.queue import process_queue; "
+            "from pathlib import Path; "
+            f"process_queue(output_dir=Path({str(output_dir)!r}), "
+            f"model={model!r}, device={device!r}, compute_type={compute_type!r})"
+        )
         try:
-            process_queue(
-                output_dir=output_dir,
-                model=w.get("model", "medium"),
-                device=w.get("device", "cpu"),
-                compute_type=w.get("compute_type", "int8"),
+            result = subprocess.run(
+                [sys.executable, "-c", script],
+                capture_output=False,
+                close_fds=True,
             )
-            on_progress("[转录] 自动转录完成")
+            if result.returncode == 0:
+                on_progress("[转录] 自动转录完成")
+            else:
+                on_progress(f"[转录] 子进程退出码 {result.returncode}")
         except Exception as e:
             on_progress(f"[转录] 失败: {e}")
 
