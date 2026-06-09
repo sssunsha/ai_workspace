@@ -73,7 +73,7 @@ _PREFIX_TO_TYPE: dict[str, str] = {
     "pdf__": "ebook",
     "code__": "code",
     "docs__": "docs",
-    "github__": "github",
+    "github__": "code",
     "article__": "article",
 }
 
@@ -143,13 +143,14 @@ def _append_from_needs_file(output_dir: "Path", pending: list) -> None:
 
 class ExtractRequested(Message):
     """用户点击「提取」按钮时发出（单 URL 或整站模式）。"""
-    def __init__(self, source: str, source_type: str, update_wiki: bool = False, crawl: bool = False, force: bool = False) -> None:
+    def __init__(self, source: str, source_type: str, update_wiki: bool = False, crawl: bool = False, force: bool = False, extra: dict | None = None) -> None:
         super().__init__()
         self.source = source
         self.source_type = source_type
         self.update_wiki = update_wiki
         self.crawl = crawl
         self.force = force
+        self.extra: dict = extra or {}
 
 
 class ExtractBatchRequested(Message):
@@ -380,6 +381,8 @@ class AddSourcePanel(Static):
     AddSourcePanel #folder-hint.visible { display: block; }
     AddSourcePanel #batch-hint { color: $warning; display: none; margin-bottom: 1; }
     AddSourcePanel #batch-hint.visible { display: block; }
+    AddSourcePanel #code-mode-row { display: none; height: auto; margin-bottom: 1; }
+    AddSourcePanel #code-mode-row.visible { display: block; }
     AddSourcePanel Horizontal { height: auto; }
     AddSourcePanel Button { margin-right: 1; }
     """
@@ -392,8 +395,13 @@ class AddSourcePanel(Static):
         ("article 单篇文章", "article"),
         ("docs 本地文档", "docs"),
         ("ebook 电子书（不支持批量）", "ebook"),
-        ("code 代码工程（不支持批量）", "code"),
-        ("github 仓库（不支持批量）", "github"),
+        ("code 本地代码工程（不支持批量）", "code"),
+    ]
+
+    _CODE_MODE_OPTIONS = [
+        ("overview — 概览（目录树 + 配置 + git 信息）", "overview"),
+        ("priority — 优先级（+ 测试 / 类型定义 / 入口文件）", "priority"),
+        ("full — 全量（所有文本文件，增量跳过已处理）", "full"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -401,8 +409,11 @@ class AddSourcePanel(Static):
         yield TextArea(id=self._ID_TEXTAREA, language=None)
         yield Label("来源类型：")
         yield Select(options=self._TYPE_OPTIONS, value="auto", id=self._ID_TYPE_SELECT)
-        yield Label("ℹ ebook / code / github 不支持批量输入，请单条使用", id=self._ID_BATCH_HINT)
+        yield Label("ℹ ebook / code 不支持批量输入，请单条使用", id=self._ID_BATCH_HINT)
         yield Checkbox("整站爬取（web 类型单 URL 时生效）", value=True, id="crawl-checkbox")
+        with Static(id="code-mode-row"):
+            yield Label("提取深度：")
+            yield Select(options=self._CODE_MODE_OPTIONS, value="overview", id="code-mode-select")
         with Horizontal(id="folder-row"):
             yield Label("保存目录名：", id="folder-label")
             yield Input(placeholder="自定义（多 URL 时必填）", id=self._ID_FOLDER_INPUT)
@@ -430,14 +441,25 @@ class AddSourcePanel(Static):
         fh.add_class("visible") if folder else fh.remove_class("visible")
 
     def on_select_changed(self, event: Select.Changed) -> None:
-        """类型切换时更新批量提示可见性。"""
+        """类型切换时更新批量提示和 code 模式选择器可见性。"""
         if event.select.id != self._ID_TYPE_SELECT:
             return
-        not_supported = str(event.value) not in self._BATCH_SUPPORTED
+        val = str(event.value)
+        not_supported = val not in self._BATCH_SUPPORTED
         if not_supported:
             self._set_hint_visibility(batch=True, folder=False)
         else:
             self._set_hint_visibility(batch=False, folder=self._is_batch_mode())
+
+        # code 类型：隐藏 crawl checkbox，显示三档模式选择器
+        cb = self.query_one("#crawl-checkbox", Checkbox)
+        mode_row = self.query_one("#code-mode-row", Static)
+        if val == "code":
+            cb.display = False
+            mode_row.add_class("visible")
+        else:
+            cb.display = True
+            mode_row.remove_class("visible")
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         """输入变化时更新多 URL 提示。"""
@@ -450,6 +472,21 @@ class AddSourcePanel(Static):
             batch=(not_supported and is_multi),
             folder=(is_multi and not not_supported),
         )
+
+    def _read_extra(self, raw_type: str) -> dict:
+        """读取当前类型附加参数（如 code 模式）。"""
+        if raw_type == "code":
+            mode_select = self.query_one("#code-mode-select", Select)
+            return {"code_mode": str(mode_select.value)}
+        return {}
+
+    def _emit_single(self, source: str, raw_type: str, update_wiki: bool,
+                     crawl: bool, extra: dict) -> None:
+        source_type = detect_source_type(source) if raw_type == "auto" else raw_type
+        self.post_message(ExtractRequested(
+            source=source, source_type=source_type,
+            update_wiki=update_wiki, crawl=crawl, extra=extra,
+        ))
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id not in ("btn-extract", "btn-extract-wiki"):
@@ -469,20 +506,15 @@ class AddSourcePanel(Static):
         folder_name = folder_input.value.strip()
         urls = self._parse_urls(text)
         is_multi = len(urls) > 1
+        extra = self._read_extra(raw_type)
 
         # 不支持批量的类型：只取第一个 URL/路径
         if raw_type not in self._BATCH_SUPPORTED:
-            source = urls[0] if urls else text
-            source_type = detect_source_type(source) if raw_type == "auto" else raw_type
-            self.post_message(ExtractRequested(
-                source=source, source_type=source_type,
-                update_wiki=update_wiki, crawl=False,
-            ))
+            self._emit_single(urls[0] if urls else text, raw_type, update_wiki, False, extra)
             textarea.clear()
             return
 
         if is_multi:
-            # 多 URL 批量模式：folder_name 必填
             if not folder_name:
                 self.query_one("#folder-hint", Label).add_class("visible")
                 return
@@ -492,14 +524,10 @@ class AddSourcePanel(Static):
                 source_type=source_type, update_wiki=update_wiki,
             ))
         else:
-            # 单 URL 模式
-            source = urls[0] if urls else text
-            source_type = detect_source_type(source) if raw_type == "auto" else raw_type
-            crawl = bool(crawl_checkbox.value)
-            self.post_message(ExtractRequested(
-                source=source, source_type=source_type,
-                update_wiki=update_wiki, crawl=crawl,
-            ))
+            self._emit_single(
+                urls[0] if urls else text, raw_type, update_wiki,
+                bool(crawl_checkbox.value), extra,
+            )
 
         textarea.clear()
         folder_input.value = ""
@@ -531,10 +559,18 @@ class QueuePanel(Static):
 
     def compose(self) -> ComposeResult:
         table = DataTable(id="queue-table", zebra_stripes=True, cursor_type="row")
-        table.add_columns("状态", "类型", "来源", "进度", "时间")
+        table.add_columns("状态", "类型", "名称", "进度", "时间")
         yield table
         yield Label("双击来源行可在 Finder 中打开对应目录", id="queue-tip")
         yield Label("", id="queue-summary")
+
+    @staticmethod
+    def _progress_str(t: "TaskEntry") -> str:
+        if t.total_estimate > 0:
+            return f"{t.page_count}/{t.total_estimate}"
+        if t.page_count > 0:
+            return f"{t.page_count}/?"
+        return "—"
 
     def refresh_table(self, tasks: list[TaskEntry]) -> None:
         """清空并重绘队列表格，同时更新底部统计摘要。"""
@@ -543,20 +579,16 @@ class QueuePanel(Static):
         table.clear()
         for t in tasks:
             icon = _STATUS_ICONS.get(t.status, "?")
-            # 优先显示 output_file（子目录名或文件名），回退到 URL 尾部
-            display_name = t.output_file or t.source
-            source_short = display_name[-45:] if len(display_name) > 45 else display_name
-            time_short = t.extracted_at[:10] if t.extracted_at else "—"
-            # 整站任务显示"类型(页数)"，单页显示类型
-            type_str = f"{t.source_type}({t.page_count})" if t.page_count > 1 else (t.source_type or "—")
-            # 进度列：已抓/目标，目标未知时显示已抓数或"—"
-            if t.total_estimate > 0:
-                progress_str = f"{t.page_count}/{t.total_estimate}"
-            elif t.page_count > 0:
-                progress_str = f"{t.page_count}/?"
+            # 名称列：优先显示 raw/ 下子目录名，回退到 URL 尾部截断
+            target_dir = self._resolve_target_dir(t)
+            if target_dir != _RAW_DIR and target_dir.is_dir():
+                name_str = target_dir.name
             else:
-                progress_str = "—"
-            table.add_row(icon, type_str, source_short, progress_str, time_short)
+                fallback = t.output_file or t.source
+                name_str = fallback[-45:] if len(fallback) > 45 else fallback
+            time_short = t.extracted_at[:10] if t.extracted_at else "—"
+            type_str = f"{t.source_type}({t.page_count})" if t.page_count > 1 else (t.source_type or "—")
+            table.add_row(icon, type_str, name_str, self._progress_str(t), time_short)
         self.query_one("#queue-summary", Label).update(self._build_summary(tasks))
 
     @staticmethod
@@ -967,35 +999,29 @@ class TUIApp(App):
         except Exception:
             pass
 
-    def _load_registry(self) -> None:
-        """从 raw/.processed.json 及各子目录的 .processed.json 加载并聚合历史任务记录。
+    @staticmethod
+    def _read_all_entries() -> list[dict]:
+        """从根 registry 和所有子目录 registry 读取全部条目，统一加子目录前缀。"""
+        from ..registry import Registry
+        all_entries: list[dict] = []
+        statuses = ("done", "done_partial", "failed", "needs_transcription")
+        if _REGISTRY_PATH.exists():
+            for e in (e for s in statuses for e in Registry(_REGISTRY_PATH).get_by_status(s)):
+                all_entries.append(e)
+        for sub_reg_path in sorted(_RAW_DIR.glob("*/.processed.json")):
+            subdir = sub_reg_path.parent.name
+            for e in (e for s in statuses for e in Registry(sub_reg_path).get_by_status(s)):
+                if e.get("output_file"):
+                    e = {**e, "output_file": f"{subdir}/{e['output_file']}"}
+                all_entries.append(e)
+        return all_entries
 
-        整站爬取（output_file 在子目录下）按子目录合并为一条；
-        单页提取保持一对一。
-        """
+    def _load_registry(self) -> None:
+        """从 raw/.processed.json 及各子目录的 .processed.json 加载并聚合历史任务记录。"""
         if not _RAW_DIR.exists():
             return
         try:
-            from ..registry import Registry
-            all_entries: list[dict] = []
-            statuses = ("done", "done_partial", "failed", "needs_transcription")
-
-            # 根 registry
-            if _REGISTRY_PATH.exists():
-                reg = Registry(_REGISTRY_PATH)
-                for e in (e for s in statuses for e in reg.get_by_status(s)):
-                    all_entries.append(e)
-
-            # 子目录 registry — output_file 补子目录前缀，让 _group_entries 能聚合
-            for sub_reg_path in sorted(_RAW_DIR.glob("*/.processed.json")):
-                subdir = sub_reg_path.parent.name
-                reg = Registry(sub_reg_path)
-                for e in (e for s in statuses for e in reg.get_by_status(s)):
-                    if e.get("output_file"):
-                        e = {**e, "output_file": f"{subdir}/{e['output_file']}"}
-                    all_entries.append(e)
-
-            groups = self._group_entries(all_entries)
+            groups = self._group_entries(self._read_all_entries())
             for g in groups.values():
                 self._tasks.append(self._build_task_entry(g))
             self._refresh_queue()
@@ -1206,7 +1232,7 @@ class TUIApp(App):
         self.log_message(f"开始提取 [{source_type}]{crawl_hint}{force_hint}: {event.source}")
         if is_crawl_task:
             self._show_progress_bar(total=self._crawl_limit)
-        self._run_extract(event.source, source_type, event.update_wiki, is_crawl_task, force, self._crawl_limit)
+        self._run_extract(event.source, source_type, event.update_wiki, is_crawl_task, force, self._crawl_limit, event.extra)
 
     def on_extract_done(self, event: ExtractDone) -> None:
         """提取完成后更新内存状态，从 registry 重新读取最新进度并刷新队列。"""
@@ -1226,20 +1252,13 @@ class TUIApp(App):
             self.log_message(f"[red]✗ 失败：{event.error}[/red]")
 
     def _reload_task_from_registry(self, source: str) -> None:
-        """从 registry 重新加载指定来源的最新数据，更新内存中的 TaskEntry。"""
+        """从 registry 重新加载所有条目，更新内存中匹配的 TaskEntry。"""
         try:
-            from ..registry import Registry
-            reg = Registry(_REGISTRY_PATH)
-            all_entries = [
-                e for s in ("done", "done_partial", "failed", "needs_transcription")
-                for e in reg.get_by_status(s)
-            ]
-            groups = self._group_entries(all_entries)
+            groups = self._group_entries(self._read_all_entries())
             for g in groups.values():
                 fresh = self._build_task_entry(g)
                 for i, t in enumerate(self._tasks):
                     if t.source == fresh.source:
-                        # 保留 status（on_extract_done 已设好），更新进度字段
                         fresh.status = t.status
                         self._tasks[i] = fresh
                         break
@@ -1247,8 +1266,9 @@ class TUIApp(App):
             self.log_message(f"[dim]进度刷新失败：{e}[/dim]")
 
     @work(thread=True)
-    def _run_extract(self, source: str, source_type: str, update_wiki: bool, crawl: bool = False, force: bool = False, limit: int = 200) -> None:
+    def _run_extract(self, source: str, source_type: str, update_wiki: bool, crawl: bool = False, force: bool = False, limit: int = 200, extra: dict | None = None) -> None:
         """在独立线程执行提取，通过 call_from_thread 回调日志。"""
+        extra = extra or {}
         def on_progress(msg: str) -> None:
             self.call_from_thread(self.log_message, msg)
 
@@ -1273,6 +1293,11 @@ class TUIApp(App):
                 from ..extractors import auto_detect_video
                 out = auto_detect_video(source, config=cfg)
                 self._auto_transcribe(cfg.output_dir, on_progress)
+            elif source_type in ("code", "github"):
+                from ..extractors.code import CodeExtractor
+                mode = extra.get("code_mode", "overview")
+                extractor = CodeExtractor(config=cfg, on_progress=on_progress)
+                out = extractor.extract(source, mode=mode)
             else:
                 self.post_message(ExtractDone(
                     source=source, success=False,
@@ -1308,7 +1333,6 @@ class TUIApp(App):
         )
         self._run_extract_batch(event.urls, event.folder_name, event.source_type, event.update_wiki)
 
-    @work(thread=True)
     @work(thread=True)
     def _run_extract_batch(self, urls: list[str], folder_name: str, source_type: str, update_wiki: bool) -> None:
         """在独立线程批量提取多个 URL 到自定义目录，根据 source_type 路由到对应提取器。"""
@@ -1354,7 +1378,15 @@ class TUIApp(App):
                 ))
                 return
 
-            out_file = str(results[0]) if results else f"raw/{folder_name}/"
+            if results:
+                first = Path(results[0])
+                # output_file 用相对格式 folder/filename，供 _group_entries 正确解析
+                try:
+                    out_file = str(first.relative_to(_RAW_DIR))
+                except ValueError:
+                    out_file = f"{folder_name}/{first.name}"
+            else:
+                out_file = folder_name
             self.post_message(ExtractDone(source=source_key, success=True, output_file=out_file))
             if update_wiki:
                 self.call_from_thread(self.push_screen, WikiModal())

@@ -102,7 +102,7 @@ content-extract/                     ← 独立 Python 项目（可 pip install 
 │   │   ├── bilibili.py              ← yt-dlp + Cookie + SRT 清洗
 │   │   ├── douyin.py                ← yt-dlp + Whisper（带限速）
 │   │   ├── ebook.py                 ← EPUB（ebooklib）+ PDF（pymupdf4llm）
-│   │   ├── code.py                  ← Python AST + TypeScript 正则 + 项目概览
+│   │   ├── code.py                  ← 三档模式（overview/priority/full）；overview 输出架构层识别+推荐阅读路径+git热力图；priority/full 额外输出 __imports.json（模块依赖关系图）
 │   │   ├── local_docs.py            ← Markdown wikilink 解析 + Office 转换
 │   │   ├── github.py                ← gh CLI：overview/issues/releases/discussions/wiki
 │   │   └── article.py               ← 单篇文章：Jina Reader + Playwright 降级 + 平台专项
@@ -407,6 +407,14 @@ Skill **不负责**提取（那是 CLI 的事），Skill 负责：
    - 否 → 结束，告知可以之后手动触发
 
 5. Wiki 更新完成 → 展示更新了哪些概念页面
+
+6. [仅代码工程触发] 困惑驱动第二轮（见 content-extraction.md 2.1B 节）
+   询问用户：「是否要进行第二轮定向提取？我可以先列出我还不清楚的关键问题。」
+   - 是 → 执行：列出 10 个「改代码必须知道但现在不知道」的问题
+           → 用问题驱动定向 grep/glob
+           → 将新文件加入 raw/，更新 Wiki
+           → 重复直到 Claude 不再产生新问题
+   - 否 → 结束
 ```
 
 ### Skill 文件结构（SKILL.md）
@@ -471,7 +479,7 @@ description: |
 **Phase 2A：高复杂度提取器（约 2 天）**
 - [ ] `extractors/douyin.py`（限速、Whisper 转录、质量过滤）
 - [ ] `extractors/ebook.py`（EPUB + PDF，按页切分）
-- [ ] `extractors/code.py`（Python AST + TypeScript 专项 + 项目概览脚本）
+- [x] `extractors/code.py`（三档模式已实现：overview/priority/full；overview 含架构层识别、推荐阅读路径、git 信息；priority/full 含测试文件 > 类型定义 > 入口文件分层提取 + __imports.json 依赖图；见操作手册 3.3/3.7 节）
 
 **Phase 2B：中等复杂度提取器（约 1.5 天）**
 - [ ] `extractors/local_docs.py`（wikilink 解析 + Office 转换；注意 `office__` 前缀）
@@ -736,8 +744,9 @@ Obsidian 有几百个插件，但这个工作流只需要 Dataview：
 | 2026-06-01 | 新增单篇网络文章来源（1.7 节）：article.py 提取器、CLI 命令 content-extract article、Skill 识别逻辑（微信/头条/通用）、frontmatter platform 枚举、对应关系表 |
 | 2026-06-01 | 架构从两层改为三层（加入 Layer 3 Obsidian 消费层），新增第十一章节（Obsidian 集成层设计：DASHBOARD.md 模板、frontmatter 对接点、gap 发现工作流、极简插件原则），Phase 0 补充 DASHBOARD.md 生成任务 |
 | 2026-06-01 | 全文二次审查修订：GitHub `--only` 语法改为 `--skip`（与 extractor 布尔参数对齐）；Click 代码片段改为 `@main.command()` 装饰器方式，增加完整示例；Phase 2 拆分为 2A/2B/2C，时间估计调整为约 5 天；新增 `content-extract init` 命令（CLI 结构 + Phase 0）；对应关系表加 ui/tui.py、ui/web.py 条目 |
-| 2026-06-01 | 删除 YouTube 相关全部内容（中国大陆网络不可访问）：移除 youtube.py 提取器、YouTube CLI 示例、youtube 平台枚举、Phase 1 YouTube 任务、对应关系表 youtube.py 行，验收标准改为 Bilibili |
+| 2026-06-06 | 更新 code.py 描述为测试优先分层（测试>接口>文档>入口>Git热力图）；Phase 2A code.py 任务描述同步；Skill 核心逻辑新增步骤6（代码工程触发困惑驱动第二轮，与操作手册 2.1B 节对齐）；目录结构 code.py 注释更新 |
 | 2026-06-01 | 新增 UI 支持：架构升级（CLI+TUI+Web UI 三种入口），无参数启动 Textual TUI，--web 启动 Streamlit；目录结构新增 ui/ 模块；Phase 2 合并提取器补全+TUI；Phase 4 补 Web UI；九、新增 UI-CLI 无缝切换实现和解耦原则；对应关系表补 ui/tui.py、ui/web.py |
+| 2026-06-07 | code.py 升级三档模式（overview/priority/full）：overview 新增架构层识别（_ARCH_LAYERS 目录名映射）、推荐阅读路径（5步，基于配置+入口+热力图）；priority/full 新增 __imports.json 生成（TS/JS/Python import 依赖图）；目录结构注释和 Phase 2A 任务条目同步更新；参考 Understand-Anything 和 agency-agents 思路 |
 
 ---
 
