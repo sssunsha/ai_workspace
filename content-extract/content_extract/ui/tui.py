@@ -32,7 +32,8 @@ from ..cli import _LAUNCH_DIR, get_raw_dir as _get_raw_dir
 
 # TUI 使用启动时锚定的 raw 目录，防止工作目录漂移导致路径嵌套
 _RAW_DIR = _get_raw_dir()
-_REGISTRY_PATH = _RAW_DIR / ".processed.json"
+_REGISTRY_FILENAME = ".processed.json"
+_REGISTRY_PATH = _RAW_DIR / _REGISTRY_FILENAME
 
 
 # ── 数据模型 ──────────────────────────────────────────────────────────────────
@@ -75,6 +76,7 @@ _PREFIX_TO_TYPE: dict[str, str] = {
     "docs__": "docs",
     "github__": "code",
     "article__": "article",
+    "local__": "local_doc",
 }
 
 
@@ -139,6 +141,20 @@ def _append_from_needs_file(output_dir: "Path", pending: list) -> None:
             pending.append({"source": url})
 
 
+def _inject_topic_frontmatter(path: Path, topic: str, topic_role: str) -> None:
+    """在已生成的 raw 文件 frontmatter 中追加 topic / topic_role 字段（如尚不存在）。"""
+    if not path.exists():
+        return
+    text = path.read_text(encoding="utf-8")
+    if "topic: " in text:
+        return
+    insert = f'topic: "{topic}"\n'
+    if topic_role:
+        insert += f'topic_role: "{topic_role}"\n'
+    text = text.replace("---\n\n", f"{insert}---\n\n", 1)
+    path.write_text(text, encoding="utf-8")
+
+
 # ── 消息定义 ──────────────────────────────────────────────────────────────────
 
 class ExtractRequested(Message):
@@ -159,6 +175,24 @@ class ExtractBatchRequested(Message):
         super().__init__()
         self.urls = urls
         self.folder_name = folder_name
+        self.source_type = source_type
+        self.update_wiki = update_wiki
+
+
+class TopicAddRequested(Message):
+    """Topic 模式下添加资料（在线 URL 或本地文件）到指定 topic。"""
+    def __init__(
+        self,
+        sources: list[str],
+        topic: str,
+        topic_role: str = "",
+        source_type: str = "auto",
+        update_wiki: bool = False,
+    ) -> None:
+        super().__init__()
+        self.sources = sources
+        self.topic = topic
+        self.topic_role = topic_role
         self.source_type = source_type
         self.update_wiki = update_wiki
 
@@ -347,7 +381,7 @@ class WikiModal(ModalScreen):
 # ── 添加来源面板 ──────────────────────────────────────────────────────────────
 
 class AddSourcePanel(Static):
-    """左侧输入面板：支持单 URL 或多 URL 批量输入。"""
+    """左侧输入面板：支持单 URL 或多 URL 批量输入，以及 Topic 学习模式。"""
 
     # 支持批量输入的类型（auto 根据 URL 自动判断）
     _BATCH_SUPPORTED = frozenset({"auto", "web", "video", "article", "docs"})
@@ -358,6 +392,12 @@ class AddSourcePanel(Static):
     _ID_BATCH_HINT  = "batch-hint"
     _ID_FOLDER_HINT = "folder-hint"
     _ID_FOLDER_INPUT = "folder-input"
+    _ID_TOPIC_CHECKBOX = "topic-mode-checkbox"
+    _ID_TOPIC_INPUT = "topic-name-input"
+    _ID_TOPIC_ROLE_SELECT = "topic-role-select"
+    _ID_TOPIC_ROW = "topic-row"
+    _ID_TOPIC_HINT = "topic-name-hint"
+    _ID_CRAWL_CHECKBOX = "crawl-checkbox"
 
     DEFAULT_CSS = """
     AddSourcePanel {
@@ -367,10 +407,22 @@ class AddSourcePanel(Static):
         padding: 1 2;
     }
     AddSourcePanel Label { margin-bottom: 0; }
-    AddSourcePanel TextArea {
+    AddSourcePanel #textarea-row {
         height: 5;
         margin-bottom: 1;
     }
+    AddSourcePanel #textarea-row TextArea {
+        width: 1fr;
+        height: 100%;
+        margin-bottom: 0;
+    }
+    AddSourcePanel #btn-browse {
+        width: auto;
+        min-width: 8;
+        display: none;
+        margin-left: 1;
+    }
+    AddSourcePanel #btn-browse.visible { display: block; }
     AddSourcePanel Input { margin-bottom: 1; }
     AddSourcePanel Select { margin-bottom: 1; }
     AddSourcePanel Checkbox { margin-bottom: 1; }
@@ -383,6 +435,10 @@ class AddSourcePanel(Static):
     AddSourcePanel #batch-hint.visible { display: block; }
     AddSourcePanel #code-mode-row { display: none; height: auto; margin-bottom: 1; }
     AddSourcePanel #code-mode-row.visible { display: block; }
+    AddSourcePanel #topic-row { display: none; height: auto; margin-bottom: 1; }
+    AddSourcePanel #topic-row.visible { display: block; }
+    AddSourcePanel #topic-name-hint { color: $error; display: none; }
+    AddSourcePanel #topic-name-hint.visible { display: block; }
     AddSourcePanel Horizontal { height: auto; }
     AddSourcePanel Button { margin-right: 1; }
     """
@@ -396,6 +452,7 @@ class AddSourcePanel(Static):
         ("docs 本地文档", "docs"),
         ("ebook 电子书（不支持批量）", "ebook"),
         ("code 本地代码工程（不支持批量）", "code"),
+        ("local 本地文件（Topic 模式）", "local"),
     ]
 
     _CODE_MODE_OPTIONS = [
@@ -404,16 +461,38 @@ class AddSourcePanel(Static):
         ("full — 全量（所有文本文件，增量跳过已处理）", "full"),
     ]
 
+    _TOPIC_ROLE_OPTIONS = [
+        ("不指定", ""),
+        ("入门概述", "入门概述"),
+        ("核心方法论", "核心方法论"),
+        ("深度参考", "深度参考"),
+        ("代码实例", "代码实例"),
+        ("案例研究", "案例研究"),
+        ("工具介绍", "工具介绍"),
+        ("个人笔记", "个人笔记"),
+    ]
+
     def compose(self) -> ComposeResult:
         yield Label("URL / 路径（多个用逗号、分号或换行分隔）：")
-        yield TextArea(id=self._ID_TEXTAREA, language=None)
+        with Horizontal(id="textarea-row"):
+            yield TextArea(id=self._ID_TEXTAREA, language=None)
+            yield Button("📂 浏览", id="btn-browse")
         yield Label("来源类型：")
         yield Select(options=self._TYPE_OPTIONS, value="auto", id=self._ID_TYPE_SELECT)
-        yield Label("ℹ ebook / code 不支持批量输入，请单条使用", id=self._ID_BATCH_HINT)
-        yield Checkbox("整站爬取（web 类型单 URL 时生效）", value=True, id="crawl-checkbox")
+        yield Label("ℹ ebook / code / local 不支持批量输入，请单条使用", id=self._ID_BATCH_HINT)
+        yield Checkbox("整站爬取（web 类型单 URL 时生效）", value=True, id=self._ID_CRAWL_CHECKBOX)
         with Static(id="code-mode-row"):
             yield Label("提取深度：")
             yield Select(options=self._CODE_MODE_OPTIONS, value="overview", id="code-mode-select")
+        # Topic 模式专用字段（local 类型时显示，其他类型通过 Checkbox 激活）
+        yield Checkbox("Topic 学习模式（将资料归入指定主题）", value=False, id=self._ID_TOPIC_CHECKBOX)
+        with Static(id=self._ID_TOPIC_ROW):
+            with Horizontal():
+                yield Label("主题名：", id="topic-label")
+                yield Input(placeholder="如：量化投资入门", id=self._ID_TOPIC_INPUT)
+            yield Label("主题角色：")
+            yield Select(options=self._TOPIC_ROLE_OPTIONS, value="", id=self._ID_TOPIC_ROLE_SELECT)
+        yield Label("⚠ 请填写 Topic 主题名", id=self._ID_TOPIC_HINT)
         with Horizontal(id="folder-row"):
             yield Label("保存目录名：", id="folder-label")
             yield Input(placeholder="自定义（多 URL 时必填）", id=self._ID_FOLDER_INPUT)
@@ -433,6 +512,9 @@ class AddSourcePanel(Static):
             return False
         return len(self._parse_urls(self.query_one(f"#{self._ID_TEXTAREA}", TextArea).text)) > 1
 
+    def _is_topic_mode(self) -> bool:
+        return bool(self.query_one(f"#{self._ID_TOPIC_CHECKBOX}", Checkbox).value)
+
     def _set_hint_visibility(self, batch: bool, folder: bool) -> None:
         """统一控制两个提示 Label 的显示/隐藏。"""
         bh = self.query_one(f"#{self._ID_BATCH_HINT}", Label)
@@ -440,8 +522,24 @@ class AddSourcePanel(Static):
         bh.add_class("visible") if batch else bh.remove_class("visible")
         fh.add_class("visible") if folder else fh.remove_class("visible")
 
+    def _update_topic_row_visibility(self) -> None:
+        """根据 Topic 模式开关控制 topic 行显示。"""
+        topic_row = self.query_one(f"#{self._ID_TOPIC_ROW}", Static)
+        if self._is_topic_mode():
+            topic_row.add_class("visible")
+        else:
+            topic_row.remove_class("visible")
+            self.query_one(f"#{self._ID_TOPIC_HINT}", Label).remove_class("visible")
+
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        if event.checkbox.id == self._ID_TOPIC_CHECKBOX:
+            self._update_topic_row_visibility()
+            # 开启 Topic 模式时隐藏整站爬取选项
+            cb = self.query_one(f"#{self._ID_CRAWL_CHECKBOX}", Checkbox)
+            cb.display = not self._is_topic_mode()
+
     def on_select_changed(self, event: Select.Changed) -> None:
-        """类型切换时更新批量提示和 code 模式选择器可见性。"""
+        """类型切换时更新批量提示、crawl checkbox 和 code 模式选择器可见性。"""
         if event.select.id != self._ID_TYPE_SELECT:
             return
         val = str(event.value)
@@ -451,15 +549,34 @@ class AddSourcePanel(Static):
         else:
             self._set_hint_visibility(batch=False, folder=self._is_batch_mode())
 
-        # code 类型：隐藏 crawl checkbox，显示三档模式选择器
-        cb = self.query_one("#crawl-checkbox", Checkbox)
+        cb = self.query_one(f"#{self._ID_CRAWL_CHECKBOX}", Checkbox)
         mode_row = self.query_one("#code-mode-row", Static)
+        browse_btn = self.query_one("#btn-browse", Button)
+        topic_cb = self.query_one(f"#{self._ID_TOPIC_CHECKBOX}", Checkbox)
+
         if val == "code":
             cb.display = False
             mode_row.add_class("visible")
-        else:
-            cb.display = True
+            browse_btn.remove_class("visible")
+            topic_cb.display = False
+        elif val == "ebook":
+            cb.display = False
             mode_row.remove_class("visible")
+            browse_btn.add_class("visible")
+            topic_cb.display = True
+        elif val == "local":
+            cb.display = False
+            mode_row.remove_class("visible")
+            browse_btn.add_class("visible")
+            # local 类型自动开启 Topic 模式
+            topic_cb.value = True
+            topic_cb.display = False
+            self._update_topic_row_visibility()
+        else:
+            cb.display = not self._is_topic_mode()
+            mode_row.remove_class("visible")
+            browse_btn.remove_class("visible")
+            topic_cb.display = True
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         """输入变化时更新多 URL 提示。"""
@@ -470,7 +587,7 @@ class AddSourcePanel(Static):
         not_supported = raw_type not in self._BATCH_SUPPORTED
         self._set_hint_visibility(
             batch=(not_supported and is_multi),
-            folder=(is_multi and not not_supported),
+            folder=(is_multi and not not_supported and not self._is_topic_mode()),
         )
 
     def _read_extra(self, raw_type: str) -> dict:
@@ -489,31 +606,54 @@ class AddSourcePanel(Static):
         ))
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-browse":
+            self._open_file_picker()
+            return
         if event.button.id not in ("btn-extract", "btn-extract-wiki"):
             return
-
         textarea = self.query_one(f"#{self._ID_TEXTAREA}", TextArea)
-        type_select = self.query_one(f"#{self._ID_TYPE_SELECT}", Select)
-        crawl_checkbox = self.query_one("#crawl-checkbox", Checkbox)
-        folder_input = self.query_one(f"#{self._ID_FOLDER_INPUT}", Input)
-
         text = textarea.text.strip()
         if not text:
             return
-
-        raw_type = str(type_select.value)
+        raw_type = str(self.query_one(f"#{self._ID_TYPE_SELECT}", Select).value)
         update_wiki = event.button.id == "btn-extract-wiki"
-        folder_name = folder_input.value.strip()
         urls = self._parse_urls(text)
+        if self._is_topic_mode() or raw_type == "local":
+            if self._emit_topic(urls or [text], raw_type, update_wiki):
+                textarea.clear()
+            return
+        self._emit_standard(urls, text, raw_type, update_wiki)
+        textarea.clear()
+
+    def _emit_topic(self, sources: list[str], raw_type: str, update_wiki: bool) -> bool:
+        """Topic 模式提交：校验 topic 名，发送 TopicAddRequested。返回是否成功。"""
+        topic_name = self.query_one(f"#{self._ID_TOPIC_INPUT}", Input).value.strip()
+        hint = self.query_one(f"#{self._ID_TOPIC_HINT}", Label)
+        if not topic_name:
+            hint.add_class("visible")
+            return False
+        hint.remove_class("visible")
+        topic_role_val = self.query_one(f"#{self._ID_TOPIC_ROLE_SELECT}", Select).value
+        topic_role = str(topic_role_val) if topic_role_val else ""
+        self.post_message(TopicAddRequested(
+            sources=sources,
+            topic=topic_name,
+            topic_role=topic_role,
+            source_type=raw_type if raw_type != "auto" else "auto",
+            update_wiki=update_wiki,
+        ))
+        return True
+
+    def _emit_standard(self, urls: list[str], text: str, raw_type: str, update_wiki: bool) -> None:
+        """标准模式提交：单条或批量，发送对应消息。"""
+        folder_input = self.query_one(f"#{self._ID_FOLDER_INPUT}", Input)
+        crawl_checkbox = self.query_one(f"#{self._ID_CRAWL_CHECKBOX}", Checkbox)
+        folder_name = folder_input.value.strip()
         is_multi = len(urls) > 1
         extra = self._read_extra(raw_type)
-
-        # 不支持批量的类型：只取第一个 URL/路径
         if raw_type not in self._BATCH_SUPPORTED:
             self._emit_single(urls[0] if urls else text, raw_type, update_wiki, False, extra)
-            textarea.clear()
             return
-
         if is_multi:
             if not folder_name:
                 self.query_one("#folder-hint", Label).add_class("visible")
@@ -528,12 +668,80 @@ class AddSourcePanel(Static):
                 urls[0] if urls else text, raw_type, update_wiki,
                 bool(crawl_checkbox.value), extra,
             )
-
-        textarea.clear()
+        folder_input.value = ""
         folder_input.value = ""
 
+    def _open_file_picker(self) -> None:
+        """在独立子进程里用 tkinter 文件对话框选择文件，结果填入 TextArea。
 
-# ── 处理队列面板 ──────────────────────────────────────────────────────────────
+        local 类型时支持 md/html/txt，ebook 类型支持 epub/pdf。
+        用子进程而非线程，避免 tkinter 和 Textual 的 event loop 冲突。
+        """
+        import threading
+        import sys
+
+        raw_type = str(self.query_one(f"#{self._ID_TYPE_SELECT}", Select).value)
+        is_local = raw_type == "local" or self._is_topic_mode()
+
+        if is_local:
+            filetypes = (
+                "('本地文档', '*.md *.html *.htm *.txt'),"
+                "('Markdown', '*.md'),"
+                "('HTML', '*.html *.htm'),"
+                "('文本', '*.txt'),"
+                "('所有文件', '*.*'),"
+            )
+            title = "选择本地文档文件"
+        else:
+            filetypes = (
+                "('电子书', '*.epub *.pdf *.mobi *.azw3 *.azw'),"
+                "('EPUB', '*.epub'),"
+                "('PDF', '*.pdf'),"
+                "('所有文件', '*.*'),"
+            )
+            title = "选择电子书文件"
+
+        # tkinter 脚本：选文件后把路径用换行分隔打印到 stdout
+        _PICKER_SCRIPT = (
+            "import sys, tkinter as tk\n"
+            "from tkinter import filedialog\n"
+            "root = tk.Tk()\n"
+            "root.withdraw()\n"
+            "root.call('wm', 'attributes', '.', '-topmost', True)\n"
+            f"files = filedialog.askopenfilenames(\n"
+            f"    title={title!r},\n"
+            f"    filetypes=[{filetypes}],\n"
+            ")\n"
+            "if files:\n"
+            "    print('\\n'.join(files))\n"
+        )
+
+        def _pick() -> None:
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-c", _PICKER_SCRIPT],
+                    capture_output=True, text=True, timeout=120,
+                )
+                output = result.stdout.strip()
+                if not output:
+                    return
+                paths = [p.strip() for p in output.splitlines() if p.strip()]
+                if paths:
+                    self.app.call_from_thread(self._fill_paths, paths)
+            except Exception as e:
+                self.app.call_from_thread(
+                    self.app.log_message, f"[yellow]文件选择器错误：{e}[/yellow]"
+                )
+
+        threading.Thread(target=_pick, daemon=True).start()
+
+    def _fill_paths(self, paths: list[str]) -> None:
+        """将路径列表填入 TextArea（主线程调用）。"""
+        textarea = self.query_one(f"#{self._ID_TEXTAREA}", TextArea)
+        textarea.clear()
+        textarea.insert("\n".join(paths))
+
+
 
 
 # ── 处理队列面板 ──────────────────────────────────────────────────────────────
@@ -572,23 +780,24 @@ class QueuePanel(Static):
             return f"{t.page_count}/?"
         return "—"
 
+    def _task_name_str(self, t: "TaskEntry") -> str:
+        """返回队列表格「名称」列的显示文字。"""
+        target_dir = self._resolve_target_dir(t)
+        if target_dir != self._raw_dir and target_dir.is_dir():
+            return target_dir.name
+        fallback = t.output_file or t.source
+        return fallback[-45:] if len(fallback) > 45 else fallback
+
     def refresh_table(self, tasks: list[TaskEntry]) -> None:
         """清空并重绘队列表格，同时更新底部统计摘要。"""
-        self._tasks = tasks  # 保留引用供双击使用
+        self._tasks = tasks
         table = self.query_one("#queue-table", DataTable)
         table.clear()
         for t in tasks:
             icon = _STATUS_ICONS.get(t.status, "?")
-            # 名称列：优先显示 raw/ 下子目录名，回退到 URL 尾部截断
-            target_dir = self._resolve_target_dir(t)
-            if target_dir != _RAW_DIR and target_dir.is_dir():
-                name_str = target_dir.name
-            else:
-                fallback = t.output_file or t.source
-                name_str = fallback[-45:] if len(fallback) > 45 else fallback
-            time_short = t.extracted_at[:10] if t.extracted_at else "—"
             type_str = f"{t.source_type}({t.page_count})" if t.page_count > 1 else (t.source_type or "—")
-            table.add_row(icon, type_str, name_str, self._progress_str(t), time_short)
+            time_short = t.extracted_at[:10] if t.extracted_at else "—"
+            table.add_row(icon, type_str, self._task_name_str(t), self._progress_str(t), time_short)
         self.query_one("#queue-summary", Label).update(self._build_summary(tasks))
 
     @staticmethod
@@ -630,6 +839,14 @@ class QueuePanel(Static):
         import subprocess
         subprocess.Popen(["open", str(target)])
 
+    @property
+    def _raw_dir(self) -> Path:
+        """从 TUIApp 读取当前 raw 目录，不可用时回退模块级默认值。"""
+        try:
+            return self.app._raw_dir  # type: ignore[attr-defined]
+        except Exception:
+            return _RAW_DIR
+
     def _resolve_target_dir(self, task: TaskEntry) -> Path:
         """从 TaskEntry 推断要打开的目录，找不到则回退到 raw 根目录。"""
         output_file = task.output_file or ""
@@ -639,25 +856,25 @@ class QueuePanel(Static):
             candidate = self._dir_from_source_url(task.source)
             if candidate is not None:
                 return candidate
-        return _RAW_DIR
+        return self._raw_dir
 
     def _dir_from_output_file(self, output_file: str) -> Path:
         """从 output_file 字段（subfolder/file.md）推断子目录。"""
+        raw = self._raw_dir
         subfolder = output_file.split("/")[0]
-        candidate = _RAW_DIR / subfolder
+        candidate = raw / subfolder
         if candidate.is_dir():
             return candidate
-        full = _RAW_DIR / output_file
+        full = raw / output_file
         if full.exists():
             return full.parent
-        return _RAW_DIR
+        return raw
 
-    @staticmethod
-    def _dir_from_source_url(source: str) -> Path | None:
+    def _dir_from_source_url(self, source: str) -> Path | None:
         """从 source URL 推断子目录名，不存在则返回 None。"""
         try:
             from ..extractors.web import _url_to_subfolder
-            candidate = _RAW_DIR / _url_to_subfolder(source)
+            candidate = self._raw_dir / _url_to_subfolder(source)
             return candidate if candidate.is_dir() else None
         except Exception:
             return None
@@ -919,6 +1136,107 @@ class HelpModal(ModalScreen):
             self.dismiss()
 
 
+# ── 配置弹窗 ──────────────────────────────────────────────────────────────────
+
+class ConfigModal(ModalScreen):
+    """应用配置弹窗：修改 raw 目录等持久化设置，保存到 ~/.content-extract/config.toml。"""
+
+    DEFAULT_CSS = """
+    ConfigModal { align: center middle; }
+    ConfigModal > Vertical {
+        background: $surface;
+        border: thick $accent;
+        padding: 2 4;
+        width: 80;
+        height: auto;
+    }
+    ConfigModal #cfg-title {
+        text-align: center;
+        text-style: bold;
+        color: $accent;
+        margin-bottom: 1;
+    }
+    ConfigModal .cfg-label { margin-top: 1; color: $text-muted; }
+    ConfigModal .cfg-hint  { color: $text-disabled; margin-bottom: 1; }
+    ConfigModal Input { margin-bottom: 1; }
+    ConfigModal #cfg-status {
+        color: $success;
+        height: 1;
+        margin-top: 1;
+    }
+    ConfigModal Horizontal { height: auto; align: center middle; margin-top: 1; }
+    ConfigModal Button { margin: 0 1; min-width: 14; }
+    """
+
+    def __init__(self, raw_dir: Path) -> None:
+        super().__init__()
+        self._raw_dir = raw_dir
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label("⚙  设置", id="cfg-title")
+
+            yield Label("Raw 数据目录", classes="cfg-label")
+            yield Label(
+                "提取内容的存储位置。支持绝对路径，重启后立即生效。",
+                classes="cfg-hint",
+            )
+            yield Input(
+                value=str(self._raw_dir),
+                placeholder="/Users/你/Documents/ai_workspace/content-extract/raw",
+                id="cfg-raw-dir",
+            )
+
+            yield Label("", id="cfg-status")
+
+            with Horizontal():
+                yield Button("保存", id="btn-cfg-save", variant="primary")
+                yield Button("取消", id="btn-cfg-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-cfg-cancel":
+            self.dismiss(None)
+            return
+        if event.button.id == "btn-cfg-save":
+            raw_input = self.query_one("#cfg-raw-dir", Input).value.strip()
+            if not raw_input:
+                self.query_one("#cfg-status", Label).update("[red]路径不能为空[/red]")
+                return
+            new_raw = Path(raw_input).expanduser().resolve()
+            self._save_config(new_raw)
+            self.dismiss(new_raw)
+
+    def _save_config(self, raw_dir: Path) -> None:
+        """将 output.dir 写入 ~/.content-extract/config.toml，合并而不覆盖其他字段。"""
+        try:
+            try:
+                import toml
+                _loads = toml.loads
+                _dumps = toml.dumps
+            except ImportError:
+                import tomllib as _tl
+                import tomli_w as _tw
+                _loads = _tl.loads
+                _dumps = _tw.dumps
+
+            cfg_dir = Path.home() / ".content-extract"
+            cfg_dir.mkdir(parents=True, exist_ok=True)
+            cfg_path = cfg_dir / "config.toml"
+
+            existing: dict = {}
+            if cfg_path.exists():
+                existing = _loads(cfg_path.read_text(encoding="utf-8"))
+
+            existing.setdefault("output", {})["dir"] = str(raw_dir)
+            cfg_path.write_text(_dumps(existing), encoding="utf-8")
+        except Exception as e:
+            self.query_one("#cfg-status", Label).update(f"[red]保存失败：{e}[/red]")
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            self.dismiss(None)
+
+
 # ── 主应用 ────────────────────────────────────────────────────────────────────
 
 class TUIApp(App):
@@ -935,6 +1253,7 @@ class TUIApp(App):
         Binding("r", "retry_failed", "重试失败", show=True),
         Binding("c", "clear_log", "清空日志", show=True),
         Binding("o", "open_obsidian", "打开Obsidian", show=True),
+        Binding("s", "show_settings", "设置", show=True),
         Binding("question_mark", "show_help", "帮助", show=True),
     ]
     DEFAULT_CSS = """
@@ -961,17 +1280,18 @@ class TUIApp(App):
 
     def __init__(self) -> None:
         super().__init__()
-        # 内存中的任务列表，启动时从 registry 加载
         self._tasks: list[TaskEntry] = []
-        # 从 config 加载的 cookie 路径
         self._cookies: dict[str, str] = {}
-        # 当前整站爬取的进度（已写入页数）
         self._crawl_progress: int = 0
         self._crawl_limit: int = 200
-        # 当前正在运行的 BFS limit 引用，修改 _active_limit_ref[0] 可实时改变上限
         self._active_limit_ref: list[int] | None = None
-        # 记录上次按 Esc 的时间（用于双击检测）
         self._last_esc_time: float = 0.0
+        # raw 目录：启动时从 config 加载，可通过设置弹窗修改
+        self._raw_dir: Path = _RAW_DIR
+
+    @property
+    def _registry_path(self) -> Path:
+        return self._raw_dir / _REGISTRY_FILENAME
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -983,9 +1303,25 @@ class TUIApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        """启动时从 registry 加载历史记录。"""
+        """启动时加载配置、从 registry 加载历史记录。"""
+        self._load_config()
         self._load_cookies()
         self._load_registry()
+
+    def _load_config(self) -> None:
+        """从 config.toml 加载 raw 目录等设置。"""
+        try:
+            from ..config import load_config
+            cfg = load_config()
+            raw_dir_str = cfg.get("output", {}).get("dir", "")
+            if raw_dir_str:
+                candidate = Path(raw_dir_str).expanduser()
+                if not candidate.is_absolute():
+                    from ..cli import _LAUNCH_DIR
+                    candidate = (_LAUNCH_DIR / candidate).resolve()
+                self._raw_dir = candidate
+        except Exception:
+            pass
 
     def _load_cookies(self) -> None:
         """从 config.toml 加载 cookie 路径。"""
@@ -1000,28 +1336,48 @@ class TUIApp(App):
             pass
 
     @staticmethod
-    def _read_all_entries() -> list[dict]:
-        """从根 registry 和所有子目录 registry 读取全部条目，统一加子目录前缀。"""
+    def _read_all_entries(raw_dir: Path) -> list[dict]:
+        """从根 registry 和所有子目录 registry 读取全部条目，统一加子目录前缀。
+
+        扫描两层深度：
+        - raw/*/.processed.json        （来源驱动目录）
+        - raw/topics/*/.processed.json （Topic 学习目录）
+        """
         from ..registry import Registry
         all_entries: list[dict] = []
         statuses = ("done", "done_partial", "failed", "needs_transcription")
-        if _REGISTRY_PATH.exists():
-            for e in (e for s in statuses for e in Registry(_REGISTRY_PATH).get_by_status(s)):
+        registry_path = raw_dir / _REGISTRY_FILENAME
+        if registry_path.exists():
+            for e in (e for s in statuses for e in Registry(registry_path).get_by_status(s)):
                 all_entries.append(e)
-        for sub_reg_path in sorted(_RAW_DIR.glob("*/.processed.json")):
-            subdir = sub_reg_path.parent.name
+
+        def _read_sub(sub_reg_path: Path, prefix: str) -> None:
             for e in (e for s in statuses for e in Registry(sub_reg_path).get_by_status(s)):
                 if e.get("output_file"):
-                    e = {**e, "output_file": f"{subdir}/{e['output_file']}"}
+                    e = {**e, "output_file": f"{prefix}/{e['output_file']}"}
                 all_entries.append(e)
+
+        # 一层子目录（来源驱动）
+        for sub_reg_path in sorted(raw_dir.glob(f"*/{_REGISTRY_FILENAME}")):
+            parent = sub_reg_path.parent
+            if parent.name == "topics":
+                continue  # topics 目录本身不是任务目录
+            _read_sub(sub_reg_path, parent.name)
+
+        # 两层子目录（topics/<topic名>）
+        for sub_reg_path in sorted(raw_dir.glob(f"topics/*/{_REGISTRY_FILENAME}")):
+            topic_dir = sub_reg_path.parent
+            prefix = f"topics/{topic_dir.name}"
+            _read_sub(sub_reg_path, prefix)
+
         return all_entries
 
     def _load_registry(self) -> None:
         """从 raw/.processed.json 及各子目录的 .processed.json 加载并聚合历史任务记录。"""
-        if not _RAW_DIR.exists():
+        if not self._raw_dir.exists():
             return
         try:
-            groups = self._group_entries(self._read_all_entries())
+            groups = self._group_entries(self._read_all_entries(self._raw_dir))
             for g in groups.values():
                 self._tasks.append(self._build_task_entry(g))
             self._refresh_queue()
@@ -1162,7 +1518,7 @@ class TUIApp(App):
         """统计与某个来源对应的 raw 目录下已有文件数。"""
         try:
             from ..extractors.web import _url_to_subfolder
-            subfolder = _RAW_DIR / _url_to_subfolder(source)
+            subfolder = self._raw_dir / _url_to_subfolder(source)
             if subfolder.is_dir():
                 return len(list(subfolder.glob("*.md")))
         except Exception:
@@ -1254,7 +1610,7 @@ class TUIApp(App):
     def _reload_task_from_registry(self, source: str) -> None:
         """从 registry 重新加载所有条目，更新内存中匹配的 TaskEntry。"""
         try:
-            groups = self._group_entries(self._read_all_entries())
+            groups = self._group_entries(self._read_all_entries(self._raw_dir))
             for g in groups.values():
                 fresh = self._build_task_entry(g)
                 for i, t in enumerate(self._tasks):
@@ -1274,7 +1630,7 @@ class TUIApp(App):
 
         try:
             from ..extractors.base import ExtractConfig
-            cfg = ExtractConfig(output_dir=_RAW_DIR, cookies=self._cookies, force=force)
+            cfg = ExtractConfig(output_dir=self._raw_dir, cookies=self._cookies, force=force)
 
             if source_type == "web":
                 from ..extractors.web import WebExtractor
@@ -1293,6 +1649,10 @@ class TUIApp(App):
                 from ..extractors import auto_detect_video
                 out = auto_detect_video(source, config=cfg)
                 self._auto_transcribe(cfg.output_dir, on_progress)
+            elif source_type == "ebook":
+                from ..extractors.ebook import EbookExtractor
+                extractor = EbookExtractor(config=cfg, on_progress=on_progress)
+                out = extractor.extract(source)
             elif source_type in ("code", "github"):
                 from ..extractors.code import CodeExtractor
                 mode = extra.get("code_mode", "overview")
@@ -1305,7 +1665,13 @@ class TUIApp(App):
                 ))
                 return
 
-            self.post_message(ExtractDone(source=source, success=True, output_file=str(out)))
+            # output_file は raw/ からの相対パス（subfolder/file.md 形式）で渡す
+            # 絶対パスだと _group_entries が subfolder を取れずフォールバックする
+            try:
+                out_rel = str(Path(out).relative_to(self._raw_dir))
+            except ValueError:
+                out_rel = str(out)
+            self.post_message(ExtractDone(source=source, success=True, output_file=out_rel))
 
             if update_wiki:
                 self.call_from_thread(self.push_screen, WikiModal())
@@ -1342,7 +1708,7 @@ class TUIApp(App):
         source_key = f"batch::{folder_name}"
         try:
             from ..extractors.base import ExtractConfig
-            cfg = ExtractConfig(output_dir=_RAW_DIR, cookies=self._cookies)
+            cfg = ExtractConfig(output_dir=self._raw_dir, cookies=self._cookies)
             results: list = []
 
             if source_type in ("web", "article"):
@@ -1355,7 +1721,7 @@ class TUIApp(App):
                 # video：逐条调用 auto_detect_video（Bilibili），输出到 raw/<folder_name>/
                 from ..extractors import auto_detect_video
                 video_cfg = ExtractConfig(
-                    output_dir=_RAW_DIR / folder_name,
+                    output_dir=self._raw_dir / folder_name,
                     cookies=self._cookies,
                 )
                 for url in urls:
@@ -1382,7 +1748,7 @@ class TUIApp(App):
                 first = Path(results[0])
                 # output_file 用相对格式 folder/filename，供 _group_entries 正确解析
                 try:
-                    out_file = str(first.relative_to(_RAW_DIR))
+                    out_file = str(first.relative_to(self._raw_dir))
                 except ValueError:
                     out_file = f"{folder_name}/{first.name}"
             else:
@@ -1392,6 +1758,109 @@ class TUIApp(App):
                 self.call_from_thread(self.push_screen, WikiModal())
         except Exception as e:
             self.post_message(ExtractDone(source=source_key, success=False, error=str(e)))
+
+    def on_topic_add_requested(self, event: TopicAddRequested) -> None:
+        """处理 Topic 模式添加请求：创建任务记录并启动 worker。"""
+        source_key = f"topic::{event.topic}"
+        existing = next((t for t in self._tasks if t.source == source_key), None)
+        if existing:
+            existing.status = "extracting"
+            existing.error = ""
+        else:
+            self._tasks.append(TaskEntry(
+                source=source_key,
+                source_type="topic",
+                status="extracting",
+                output_file=f"topics/{event.topic}",
+            ))
+        self._refresh_queue()
+        self.log_message(
+            f"[Topic] 添加到「{event.topic}」：{len(event.sources)} 个来源"
+        )
+        self._run_topic_add(event.sources, event.topic, event.topic_role,
+                            event.source_type, event.update_wiki)
+
+    @work(thread=True)
+    def _run_topic_add(
+        self,
+        sources: list[str],
+        topic: str,
+        topic_role: str,
+        source_type: str,
+        update_wiki: bool,
+    ) -> None:
+        """在独立线程处理 Topic 添加：本地文件直接导入，在线 URL 路由到对应提取器。"""
+        def on_progress(msg: str) -> None:
+            self.call_from_thread(self.log_message, msg)
+
+        source_key = f"topic::{topic}"
+        topic_dir = self._raw_dir / "topics" / topic
+        try:
+            from ..extractors.base import ExtractConfig
+            results: list = []
+            cfg = ExtractConfig(output_dir=self._raw_dir, cookies=self._cookies)
+
+            for src in sources:
+                p = Path(src)
+                if not src.startswith(("http://", "https://")) and p.exists():
+                    out = self._topic_add_local(src, topic, topic_role, cfg, on_progress)
+                else:
+                    out = self._topic_add_url(src, topic, topic_role, source_type, topic_dir, on_progress)
+                if out is not None:
+                    results.append(out)
+
+            if any(Path(r).name.startswith("bili__") for r in results):
+                self._auto_transcribe(topic_dir, on_progress)
+
+            if results and Path(results[0]).is_relative_to(self._raw_dir):
+                out_file = str(Path(results[0]).relative_to(self._raw_dir))
+            else:
+                out_file = f"topics/{topic}"
+            self.post_message(ExtractDone(source=source_key, success=True, output_file=out_file))
+            if update_wiki:
+                self.call_from_thread(self.push_screen, WikiModal())
+        except Exception as e:
+            self.post_message(ExtractDone(source=source_key, success=False, error=str(e)))
+
+    def _topic_add_local(
+        self, src: str, topic: str, topic_role: str, cfg: "object", on_progress
+    ) -> "Path | None":
+        """导入单个本地文件到 topic 目录。"""
+        from ..extractors.local_topic import LocalTopicExtractor
+        p = Path(src)
+        try:
+            extractor = LocalTopicExtractor(config=cfg, on_progress=on_progress)
+            out = extractor.extract(src, topic=topic, topic_role=topic_role)
+            on_progress(f"[完成] {p.name} → {out.name}（topic: {topic}）")
+            return out
+        except Exception as err:
+            on_progress(f"[失败] {p.name}：{err}")
+            return None
+
+    def _topic_add_url(
+        self, src: str, topic: str, topic_role: str, source_type: str,
+        topic_dir: Path, on_progress
+    ) -> "Path | None":
+        """提取单个在线 URL 并归入 topic 目录。"""
+        from ..extractors.base import ExtractConfig
+        actual_type = detect_source_type(src) if source_type == "auto" else source_type
+        url_cfg = ExtractConfig(output_dir=topic_dir, cookies=self._cookies)
+        try:
+            if actual_type in ("video", "bilibili"):
+                from ..extractors import auto_detect_video
+                out = auto_detect_video(src, config=url_cfg)
+            elif actual_type == "ebook":
+                from ..extractors.ebook import EbookExtractor
+                out = EbookExtractor(config=url_cfg, on_progress=on_progress).extract(src)
+            else:
+                from ..extractors.web import WebExtractor
+                out = WebExtractor(config=url_cfg, on_progress=on_progress).extract(src)
+            _inject_topic_frontmatter(out, topic, topic_role)
+            on_progress(f"[完成] {src} → {out.name}")
+            return out
+        except Exception as err:
+            on_progress(f"[失败] {src}：{err}")
+            return None
 
     def _auto_transcribe(self, output_dir: Path, on_progress) -> None:
         """提取完成后，若目录中有待转录条目则自动触发 Whisper 转录。
@@ -1421,7 +1890,7 @@ class TUIApp(App):
         """收集待转录条目，并将可重试的 failed 条目重置为 needs_transcription。"""
         from ..registry import Registry
 
-        reg_path = output_dir / ".processed.json"
+        reg_path = output_dir / _REGISTRY_FILENAME
         if not reg_path.exists():
             return []
 
@@ -1507,7 +1976,7 @@ class TUIApp(App):
         """从内存列表和 registry 中删除指定任务的所有记录（按子目录批量清除）。"""
         try:
             from ..registry import Registry
-            reg = Registry(_REGISTRY_PATH)
+            reg = Registry(self._registry_path)
             if task.output_file:
                 count = reg.remove_by_output_prefix(task.output_file)
                 self.log_message(f"已清空 {count} 条记录：{task.output_file}")
@@ -1521,7 +1990,7 @@ class TUIApp(App):
 
     def _trigger_manual_transcribe(self, task: "TaskEntry") -> None:
         """手动触发指定 video 任务的 Whisper 转录。"""
-        output_dir = _RAW_DIR / task.output_file if task.output_file else _RAW_DIR
+        output_dir = self._raw_dir / task.output_file if task.output_file else self._raw_dir
         self.log_message(f"[转录] 手动触发：{task.output_file or task.source}")
         self._run_transcribe(output_dir)
 
@@ -1535,6 +2004,19 @@ class TUIApp(App):
     def action_show_help(self) -> None:
         """显示操作手册弹窗。"""
         self.push_screen(HelpModal())
+
+    def action_show_settings(self) -> None:
+        """显示配置弹窗，保存后立即更新 raw 目录并重新加载历史记录。"""
+        def _on_saved(new_raw: Path | None) -> None:
+            if new_raw is None:
+                return
+            self._raw_dir = new_raw
+            new_raw.mkdir(parents=True, exist_ok=True)
+            self._tasks.clear()
+            self._load_registry()
+            self.log_message(f"[green]✓ 配置已保存，Raw 目录切换为：{new_raw}[/green]")
+
+        self.push_screen(ConfigModal(self._raw_dir), _on_saved)
 
     def action_clear_log(self) -> None:
         """清空日志面板。"""
