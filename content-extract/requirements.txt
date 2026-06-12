@@ -5,6 +5,10 @@ toml>=0.10
 # web
 crawl4ai
 
+# article（微信公众号 + 今日头条）
+camoufox       # 微信：stealth browser，绕过强反爬
+playwright     # 头条：Playwright Chromium
+
 # video
 yt-dlp
 
@@ -15,10 +19,11 @@ zhconv
 # dev/test
 pytest>=7.0
 
-# ebook（Phase 2，占位）
-# ebooklib
-# beautifulsoup4
-# pymupdf4llm
+# ebook
+ebooklib>=0.18
+beautifulsoup4>=4.12
+pymupdf4llm>=0.0.17   # 文字型 PDF（推荐）
+# marker-pdf           # 复杂排版 PDF（可选，体积较大）
 
 # rag（Phase 4，占位）
 # chromadb

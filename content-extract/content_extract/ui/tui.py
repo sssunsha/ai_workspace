@@ -91,21 +91,27 @@ def _infer_type(output_file: str) -> str:
 
 # ── 类型自动识别 ──────────────────────────────────────────────────────────────
 
+_VIDEO_DOMAINS = {"bilibili.com", "b23.tv"}
+_ARTICLE_DOMAINS = {"mp.weixin.qq.com", "weixin.qq.com", "toutiao.com", "ixigua.com"}
+
+
 def detect_source_type(source: str) -> str:
     """根据 URL 或路径自动识别来源类型。"""
-    if source.startswith(("http://", "https://")):
-        if "bilibili.com" in source or "b23.tv" in source:
-            return "video"
-        if "github.com" in source:
-            return "github"
-        return "article"
+    if not source.startswith(("http://", "https://")):
+        return _detect_local_type(source)
+    if any(d in source for d in _VIDEO_DOMAINS):
+        return "video"
+    if "github.com" in source:
+        return "github"
+    return "article"
+
+
+def _detect_local_type(source: str) -> str:
     p = Path(source)
     if p.suffix in {".epub", ".pdf", ".mobi"}:
         return "ebook"
     if p.is_dir():
-        if (p / "package.json").exists() or (p / "pyproject.toml").exists():
-            return "code"
-        return "docs"
+        return "code" if (p / "package.json").exists() or (p / "pyproject.toml").exists() else "docs"
     return "docs"
 
 
@@ -1649,6 +1655,9 @@ class TUIApp(App):
                 from ..extractors import auto_detect_video
                 out = auto_detect_video(source, config=cfg)
                 self._auto_transcribe(cfg.output_dir, on_progress)
+            elif source_type == "article":
+                from ..extractors import auto_detect_article
+                out = auto_detect_article(source, config=cfg, on_progress=on_progress)
             elif source_type == "ebook":
                 from ..extractors.ebook import EbookExtractor
                 extractor = EbookExtractor(config=cfg, on_progress=on_progress)
@@ -1852,6 +1861,9 @@ class TUIApp(App):
             elif actual_type == "ebook":
                 from ..extractors.ebook import EbookExtractor
                 out = EbookExtractor(config=url_cfg, on_progress=on_progress).extract(src)
+            elif actual_type == "article":
+                from ..extractors import auto_detect_article
+                out = auto_detect_article(src, config=url_cfg, on_progress=on_progress)
             else:
                 from ..extractors.web import WebExtractor
                 out = WebExtractor(config=url_cfg, on_progress=on_progress).extract(src)
