@@ -69,14 +69,6 @@ class LocalTopicExtractor(BaseExtractor):
         filename = f"local__{slug}.md"
         out_path = output_dir / filename
 
-        # 写入引用文件（source 记录原始绝对路径）
-        extra_frontmatter = {
-            "format": src.suffix.lstrip("."),
-            "topic": topic,
-        }
-        if topic_role:
-            extra_frontmatter["topic_role"] = topic_role
-
         content_hash = hashlib.sha256(content.encode()).hexdigest()[:8]
         _write_topic_file(
             path=out_path,

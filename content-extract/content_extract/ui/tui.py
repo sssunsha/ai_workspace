@@ -92,16 +92,22 @@ def _infer_type(output_file: str) -> str:
 # ── 类型自动识别 ──────────────────────────────────────────────────────────────
 
 _VIDEO_DOMAINS = {"bilibili.com", "b23.tv"}
-_ARTICLE_DOMAINS = {"mp.weixin.qq.com", "weixin.qq.com", "toutiao.com", "ixigua.com"}
+
+
+def _netloc(url: str) -> str:
+    """提取 URL 的 hostname，用于精确域名匹配，避免子串误判。"""
+    from urllib.parse import urlparse
+    return urlparse(url).netloc.lower()
 
 
 def detect_source_type(source: str) -> str:
     """根据 URL 或路径自动识别来源类型。"""
     if not source.startswith(("http://", "https://")):
         return _detect_local_type(source)
-    if any(d in source for d in _VIDEO_DOMAINS):
+    host = _netloc(source)
+    if any(host == d or host.endswith("." + d) for d in _VIDEO_DOMAINS):
         return "video"
-    if "github.com" in source:
+    if host == "github.com" or host.endswith(".github.com"):
         return "github"
     return "article"
 
@@ -152,7 +158,12 @@ def _inject_topic_frontmatter(path: Path, topic: str, topic_role: str) -> None:
     if not path.exists():
         return
     text = path.read_text(encoding="utf-8")
-    if "topic: " in text:
+    # 只检查 frontmatter 区域（第一个 --- 和第二个 --- 之间），避免误判正文内容
+    fm_end = text.find("\n---\n", 4)  # 跳过开头的 ---
+    if fm_end == -1:
+        return
+    frontmatter = text[:fm_end]
+    if "\ntopic:" in frontmatter or frontmatter.startswith("topic:"):
         return
     insert = f'topic: "{topic}"\n'
     if topic_role:
