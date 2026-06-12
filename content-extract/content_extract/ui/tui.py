@@ -463,9 +463,9 @@ class AddSourcePanel(Static):
     # 类型下拉选项
     _TYPE_OPTIONS = [
         ("自动识别", "auto"),
-        ("web 网页", "web"),
+        ("web 网页（整站/单页）", "web"),
         ("video 视频（Bilibili）", "video"),
-        ("article 单篇文章", "article"),
+        ("article 文章（微信/头条/知乎/通用）", "article"),
         ("docs 本地文档", "docs"),
         ("ebook 电子书（不支持批量）", "ebook"),
         ("code 本地代码工程（不支持批量）", "code"),
