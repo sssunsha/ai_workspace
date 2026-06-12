@@ -101,11 +101,12 @@ content-extract/                     ← 独立 Python 项目（可 pip install 
 │   │   ├── web.py                   ← crawl4ai / Jina Reader
 │   │   ├── bilibili.py              ← yt-dlp + Cookie + SRT 清洗
 │   │   ├── douyin.py                ← yt-dlp + Whisper（带限速）
-│   │   ├── ebook.py                 ← EPUB（ebooklib）+ PDF（pymupdf4llm）
+│   │   ├── ebook.py                 ← EPUB（ebooklib）+ PDF（pymupdf4llm）；EPUB 额外输出 __toc.md（TOC 结构）+ chapter_title frontmatter；MOBI/AZW3 需先用 Calibre 转 EPUB
 │   │   ├── code.py                  ← 三档模式（overview/priority/full）；overview 输出架构层识别+推荐阅读路径+git热力图；priority/full 额外输出 __imports.json（模块依赖关系图）
 │   │   ├── local_docs.py            ← Markdown wikilink 解析 + Office 转换
 │   │   ├── github.py                ← gh CLI：overview/issues/releases/discussions/wiki
-│   │   └── article.py               ← 单篇文章：Jina Reader + Playwright 降级 + 平台专项
+│   │   ├── article.py               ← 单篇文章：微信（camoufox stealth browser，95%+）/ 头条（Playwright，90%+）/ 通用（crawl4ai→Jina降级）；平台自动识别路由（已实现）
+│   │   └── local_topic.py           ← Topic 模式本地文件导入（md/html/txt → local__ 前缀，不复制原文，写 topic/topic_role frontmatter）
 │   │
 │   ├── transcribe/
 │   │   ├── whisper_local.py         ← faster-whisper 封装
@@ -234,6 +235,7 @@ content-extract video https://www.douyin.com/user/xxx --limit 30 --min-duration 
 content-extract ebook ./books/                            # 整目录批量
 content-extract ebook ./book.epub
 content-extract ebook ./paper.pdf
+# MOBI/AZW3 需先转换：ebook-convert input.mobi output.epub
 
 # 本地代码
 content-extract code ./my-project
@@ -255,6 +257,14 @@ content-extract article https://zhuanlan.zhihu.com/p/xxxxxxxx
 content-extract article https://mp.weixin.qq.com/s/xxxxxxxx  # 触发微信手动指引
 content-extract article https://medium.com/@author/title
 content-extract article --batch article_urls.txt              # 批量收藏
+
+# Topic 学习模式（主题驱动，混合来源）
+content-extract topic new "量化投资入门"                        # 创建 topic，生成 raw/topics/量化投资入门/
+content-extract topic add "量化投资入门" https://bili.com/...  # 添加在线资料到 topic
+content-extract topic add "量化投资入门" ./笔记/策略.md --role "个人笔记"   # 添加本地文件
+content-extract topic add "量化投资入门" ./book.epub --role "深度参考"      # 添加电子书
+content-extract topic list                                     # 列出所有 topic
+content-extract topic status "量化投资入门"                    # 查看 topic 内资料状态
 
 # 状态管理
 content-extract status                                    # 显示队列状态
@@ -478,13 +488,13 @@ description: |
 
 **Phase 2A：高复杂度提取器（约 2 天）**
 - [ ] `extractors/douyin.py`（限速、Whisper 转录、质量过滤）
-- [ ] `extractors/ebook.py`（EPUB + PDF，按页切分）
-- [x] `extractors/code.py`（三档模式已实现：overview/priority/full；overview 含架构层识别、推荐阅读路径、git 信息；priority/full 含测试文件 > 类型定义 > 入口文件分层提取 + __imports.json 依赖图；见操作手册 3.3/3.7 节）
+- [x] `extractors/ebook.py`（已实现）：EPUB → `__toc.md`（TOC 含条目数）+ `__ch001.md~__chXXX.md`（frontmatter 含 `chapter_title`，支持增量跳过）；PDF → 每 20 页一个 `__part001.md`（pymupdf4llm 优先，回退 pymupdf，支持 marker-pdf）；MOBI/AZW3 → 拒绝并给出 Calibre 转换命令；支持单文件和目录批量；见操作手册 1.3 节）
+- [x] `extractors/code.py`（三档模式已实现；见操作手册 3.3/3.7 节）
 
 **Phase 2B：中等复杂度提取器（约 1.5 天）**
 - [ ] `extractors/local_docs.py`（wikilink 解析 + Office 转换；注意 `office__` 前缀）
 - [ ] `extractors/github.py`（gh CLI：overview/issues/releases/discussions/wiki/代码结构；`--skip` 参数对应 `issues=False` 等布尔参数，见 1.6 节）
-- [ ] `extractors/article.py`（Jina Reader 通用 + Playwright 降级 + 微信/头条专项，见 1.7 节）
+- [x] `extractors/article.py`（已实现：微信→camoufox 95%+ / 头条→Playwright 90%+ / 通用→crawl4ai→Jina降级；平台自动识别，见 1.7 节）
 - [ ] `utils/clean.py`（Claude Haiku 转录质量清洗，含低质量过滤）
 - [ ] `utils/pdf_detect.py`（扫描版 vs 文字型识别）
 
@@ -526,11 +536,37 @@ description: |
 
 | 功能 | 描述 | 依赖 |
 |------|------|------|
+| **Topic 学习模式** | `content-extract topic` 子命令 + TUI Topic 模式面板；支持混合来源（在线 URL + 本地文件）归入同一主题目录；TUI 新增 Topic 模式切换和 topic_role 选择；见操作手册 3.8 节 | `local_topic.py` + TUI 扩展 |
 | RAG 集成 | `content-extract index` 命令，将 wiki/ 向量化到 ChromaDB | chromadb + sentence-transformers |
 | Web UI（Streamlit） | `content-extract --web` 启动浏览器 UI，适合非终端用户 | streamlit |
 | 说话人分离 | `--diarize` 选项，访谈/对话视频专用 | pyannote.audio + HuggingFace token |
 | 定时调度 | `content-extract watch <url> --interval 1d` 定期重新提取 | cron / APScheduler |
 | Plugin 打包 | 将 CLI + Skill 打包成 Claude Code Plugin 发布 | 待 Plugin 格式稳定后 |
+
+#### Topic 模式 TUI 设计（Phase 4 详细）
+
+TUI 新增「Topic 模式」切换，激活后 AddSourcePanel 变化：
+
+```
+┌── 添加来源（Topic 模式）──────────────────────┐
+│  Topic 名称：[量化投资入门         ] [新建/选择]  │
+│                                              │
+│  资料来源：                                   │
+│  ○ 在线 URL    ○ 本地文件                     │
+│                                              │
+│  URL / 文件路径：                             │
+│  > _                           [📂 浏览]     │
+│                                              │
+│  来源类型：[自动识别 ▾]                        │
+│  Topic 角色：[入门概述 ▾]                      │
+│                                              │
+│  [添加到 Topic]                               │
+└──────────────────────────────────────────────┘
+```
+
+- 「来源类型」对在线 URL 自动识别，对本地文件自动按扩展名识别
+- 「Topic 角色」下拉：入门概述 / 核心方法论 / 深度参考 / 代码实例 / 案例研究 / 工具介绍
+- 本地文件选择后不复制，只记录路径并提取内容
 
 ---
 
@@ -616,6 +652,27 @@ TUI/Web UI 只做：
 
 UI 不包含任何提取逻辑。所有平台细节（Cookie 路径、SRT 清洗、Whisper 参数）都在 `extractors/` 里，CLI 和 UI 行为完全一致。
 
+### Topic 维度设计决策
+
+**Topic 是容器，不是来源类型**
+
+Topic 不新增 source_type，它是一个「收集篮」。内部资料仍然走现有提取器（web/video/ebook/code），只是 frontmatter 多了 `topic` 和 `topic_role` 两个字段。这样不破坏现有逻辑，也不需要为 Topic 单独维护提取器。
+
+**为什么不复制本地文件**
+
+本地 md/html 文件导入时只生成引用文件，不复制原文件到 raw/。原因：
+1. 避免数据重复——原文件是单一来源，修改后只需重新导入
+2. raw/ 体积不膨胀
+3. `source` 字段记录绝对路径，Claude 知道这是本地文件，不会试图联网
+
+**Topic raw/ 和来源 raw/ 并列存在**
+
+`raw/topics/<topic>/` 和 `raw/刘伯涛财富圈-B站/` 共存于 `raw/`。同一个视频可以同时存在于两个目录——来源目录是「完整消化一个来源」，Topic 目录是「为某个学习目标收集资料」，两者目的不同，不冲突。
+
+**wiki 分离**
+
+`wiki/topics/<topic>/` 和 `wiki/刘伯涛财富圈-B站/` 分别存在，wiki 构建策略不同：来源 wiki 是「这个来源说了什么」，Topic wiki 是「我怎么学会这个主题」（含 roadmap.md / gaps.md）。
+
 ---
 
 ## 十、与 content-extraction.md 的关系
@@ -633,11 +690,12 @@ UI 不包含任何提取逻辑。所有平台细节（Cookie 路径、SRT 清洗
 | `extractors/bilibili.py` | 1.2 视频网站 → Bilibili |
 | `extractors/douyin.py` | 1.2 视频网站 → 抖音 |
 | `transcribe/whisper_local.py` | 1.2 视频网站 → Whisper 转录（通用兜底）|
-| `extractors/ebook.py` | 1.3 电子书 |
+| `extractors/ebook.py` | 1.3 电子书（EPUB TOC提取、chapter_title frontmatter、Kindle标注解析）|
 | `extractors/code.py` | 1.4 本地代码工程 |
 | `extractors/local_docs.py` | 1.5 本地文档工程 |
 | `extractors/github.py` | 1.6 GitHub 仓库 |
-| `extractors/article.py` | 1.7 单篇网络文章 |
+| `extractors/article.py` | 1.7 单篇网络文章（微信/camoufox、头条/Playwright、通用/crawl4ai） |
+| `extractors/local_topic.py` | 1.8 Topic 模式本地资料导入 |
 | `utils/clean.py` | 3.2 字幕/转录质量差 |
 | `utils/pdf_detect.py` | 3.4 PDF 扫描版 / 复杂排版 |
 | `registry.py` | 爬取脚本的增量去重机制 |
@@ -744,7 +802,8 @@ Obsidian 有几百个插件，但这个工作流只需要 Dataview：
 | 2026-06-01 | 新增单篇网络文章来源（1.7 节）：article.py 提取器、CLI 命令 content-extract article、Skill 识别逻辑（微信/头条/通用）、frontmatter platform 枚举、对应关系表 |
 | 2026-06-01 | 架构从两层改为三层（加入 Layer 3 Obsidian 消费层），新增第十一章节（Obsidian 集成层设计：DASHBOARD.md 模板、frontmatter 对接点、gap 发现工作流、极简插件原则），Phase 0 补充 DASHBOARD.md 生成任务 |
 | 2026-06-01 | 全文二次审查修订：GitHub `--only` 语法改为 `--skip`（与 extractor 布尔参数对齐）；Click 代码片段改为 `@main.command()` 装饰器方式，增加完整示例；Phase 2 拆分为 2A/2B/2C，时间估计调整为约 5 天；新增 `content-extract init` 命令（CLI 结构 + Phase 0）；对应关系表加 ui/tui.py、ui/web.py 条目 |
-| 2026-06-06 | 更新 code.py 描述为测试优先分层（测试>接口>文档>入口>Git热力图）；Phase 2A code.py 任务描述同步；Skill 核心逻辑新增步骤6（代码工程触发困惑驱动第二轮，与操作手册 2.1B 节对齐）；目录结构 code.py 注释更新 |
+| 2026-06-11 | 新增 Topic 学习模式设计：目录结构加 `local_topic.py`；CLI 新增 `content-extract topic` 子命令（new/add/list/status）；Phase 4 升级（Topic 模式升为首位可选增强，含 TUI Topic 模式面板线框图）；设计决策新增 Topic 维度四条决策记录；对应关系表加 `local_topic.py` 条目 |
+| 2026-06-12 | 1.7 节 article.py 实现升级：微信改用 camoufox stealth browser（95%+ 成功率）、头条改用 Playwright（90%+）、通用改用 crawl4ai→Jina降级链；Phase 2B article.py 标记为已实现；目录结构和对应关系表同步更新 |
 | 2026-06-01 | 新增 UI 支持：架构升级（CLI+TUI+Web UI 三种入口），无参数启动 Textual TUI，--web 启动 Streamlit；目录结构新增 ui/ 模块；Phase 2 合并提取器补全+TUI；Phase 4 补 Web UI；九、新增 UI-CLI 无缝切换实现和解耦原则；对应关系表补 ui/tui.py、ui/web.py |
 | 2026-06-07 | code.py 升级三档模式（overview/priority/full）：overview 新增架构层识别（_ARCH_LAYERS 目录名映射）、推荐阅读路径（5步，基于配置+入口+热力图）；priority/full 新增 __imports.json 生成（TS/JS/Python import 依赖图）；目录结构注释和 Phase 2A 任务条目同步更新；参考 Understand-Anything 和 agency-agents 思路 |
 
