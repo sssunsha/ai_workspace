@@ -1,0 +1,223 @@
+{
+  "main": {
+    "id": "aa1049025ff17f30",
+    "type": "split",
+    "children": [
+      {
+        "id": "36739a089900b3c5",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "451f0b59440ca072",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "learning/INDEX.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "INDEX"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "b6c2af380f242868",
+    "type": "split",
+    "children": [
+      {
+        "id": "0dc79d415bf44b99",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "bee95874df37dfc6",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Files"
+            }
+          },
+          {
+            "id": "755fa8fda2b7aee6",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "搜索"
+            }
+          },
+          {
+            "id": "0bdeb585e0e2f5ed",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "书签"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "724a4c91a5cbc323",
+    "type": "split",
+    "children": [
+      {
+        "id": "fb8206e519fe829f",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "b68d5db0416d406c",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "反向链接"
+            }
+          },
+          {
+            "id": "d2e0e47b1a769db1",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "出链"
+            }
+          },
+          {
+            "id": "094a239cb8651733",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "标签"
+            }
+          },
+          {
+            "id": "b6fc47385537b587",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "添加笔记属性"
+            }
+          },
+          {
+            "id": "e6b8f4f7abf8441a",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "大纲"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Open quick switcher": false,
+      "graph:Open graph view": false,
+      "canvas:Create new canvas": false,
+      "daily-notes:Open today's daily note": false,
+      "templates:Insert template": false,
+      "command-palette:Open command palette": false,
+      "bases:Create new base": false,
+      "obsidian-importer:Open Importer": false
+    }
+  },
+  "active": "451f0b59440ca072",
+  "lastOpenFiles": [
+    "learning/cheatsheet.md",
+    "learning/concepts/learning-分散学习.md",
+    "learning/concepts/learning-低效学习方法识别.md",
+    "learning/concepts/learning-交叉学习.md",
+    "learning/concepts/learning-主动回忆.md",
+    "learning/by-source/上瘾式学习-安川康介.md",
+    "hai-docs/by-source/hai-docs-tools-report.md",
+    "INDEX.md",
+    "learning/INDEX.md",
+    "DASHBOARD.md",
+    "hai-docs/INDEX.md",
+    "investing/INDEX.md",
+    "spartacus/系统契约.md",
+    "spartacus/架构总览.md",
+    "spartacus/复杂区域.md",
+    "spartacus/公开API.md",
+    "hai-docs/by-source/hai-docs-pull-request-bot.md",
+    "hai-docs/by-source/hai-docs-mcp-registry.md",
+    "hai-docs/by-source/hai-docs-llm-proxy.md",
+    "hai-docs/by-source/hai-docs-eater.md",
+    "hai-docs/concepts/hyperspace-ai-platform-overview.md",
+    "hai-docs/concepts/eater-overview.md",
+    "hai-docs/concepts/mcp-registry-overview.md",
+    "hai-docs/concepts/pr-bot-overview.md",
+    "hai-docs/concepts/pr-bot-configuration.md",
+    "hai-docs/concepts/llm-proxy-production-use.md",
+    "spartacus",
+    "hai-docs/concepts",
+    "hai-docs/by-source",
+    "hai-docs",
+    "learning/concepts",
+    "learning/by-source",
+    "learning",
+    "investing/concepts",
+    "investing/by-source",
+    "investing"
+  ]
+}

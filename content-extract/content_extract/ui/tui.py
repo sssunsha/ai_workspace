@@ -401,7 +401,7 @@ class AddSourcePanel(Static):
     """左侧输入面板：支持单 URL 或多 URL 批量输入，以及 Topic 学习模式。"""
 
     # 支持批量输入的类型（auto 根据 URL 自动判断）
-    _BATCH_SUPPORTED = frozenset({"auto", "web", "video", "article", "docs"})
+    _BATCH_SUPPORTED = frozenset({"auto", "web", "video", "article"})
 
     # 组件 ID 常量
     _ID_TEXTAREA    = "url-textarea"
@@ -576,6 +576,11 @@ class AddSourcePanel(Static):
             mode_row.add_class("visible")
             browse_btn.remove_class("visible")
             topic_cb.display = False
+        elif val == "docs":
+            cb.display = False
+            mode_row.remove_class("visible")
+            browse_btn.add_class("visible")
+            topic_cb.display = True
         elif val == "ebook":
             cb.display = False
             mode_row.remove_class("visible")
@@ -1678,6 +1683,10 @@ class TUIApp(App):
                 mode = extra.get("code_mode", "overview")
                 extractor = CodeExtractor(config=cfg, on_progress=on_progress)
                 out = extractor.extract(source, mode=mode)
+            elif source_type == "docs":
+                from ..extractors.local_docs import LocalDocsExtractor
+                extractor = LocalDocsExtractor(config=cfg, on_progress=on_progress)
+                out = extractor.extract(source)
             else:
                 self.post_message(ExtractDone(
                     source=source, success=False,

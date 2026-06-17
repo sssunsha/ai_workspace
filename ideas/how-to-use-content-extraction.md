@@ -618,7 +618,70 @@ pip install playwright && playwright install chromium  # 头条专用
 
 ---
 
-### 跨书对比（同主题多本书）
+### 借鉴自 book-to-skill 的三项增强（2026-06-15 更新）
+
+参考：[virgiliojr94/book-to-skill](https://github.com/virgiliojr94/book-to-skill)，该工具将书籍提炼为 LLM 可调用的 skill，其设计哲学对本流程有三点可借鉴之处。
+
+---
+
+#### 增强一：每个 is_actionable 概念页补充「典型应用示例」字段
+
+**位置**：在「不同来源的视角」之前插入。
+
+**内容要求**：重建作者书中实际走过的一个完整例子——不是「白纸学习法有4个步骤」，而是「作者备考心力衰竭章节时，具体怎么用白纸法，写了什么，遗漏了哪里，第二天怎么补」。
+
+**why**：概念定义告诉你「什么是白纸法」，典型应用示例告诉你「在真实场景里它长什么样」。后者才是回看时真正有价值的东西。对于 `is_actionable: false` 的原则性概念，此字段可省略。
+
+**格式参考**：
+
+```markdown
+## 典型应用示例
+
+**[场景名称]**
+
+[作者实际操作的完整过程，包含：输入（面对什么内容）、行动（具体怎么做）、输出（得到什么结果）、关键感受/反直觉发现]
+```
+
+**已应用的示例**：`wiki/learning/` 下所有 6 个 is_actionable 概念页均已补充此字段，见 [[learning/concepts/learning-主动回忆]] 等。
+
+---
+
+#### 增强二：每个领域补充 cheatsheet.md
+
+**位置**：与 INDEX.md、by-source/ 并列，放在领域根目录。
+
+**内容要求**（按优先级排序，参考 book-to-skill 的定义）：
+
+1. **决策规则**：「当 X 情境时，用 Y，因为 Z。」每行都应帮助读者做决定，而不只是描述概念。
+2. **权衡矩阵**：竞争方案在作者关心的维度上的评分，让读者在自身约束下选择。
+3. **阈值与默认值**：作者明确给出的具体数字或规则（「睡眠 ≥ 7 小时」「复习间隔 = 考试前1/5时间」）。
+4. **Tells & Smells**：快速识别「我现在陷入什么陷阱」的启发式（「你有这个感觉 → 实际情况 → 应该做什么」）。
+
+**什么不应该放**：纯术语定义（那是 concepts/ 的事）、长段解释性文字（那是来源摘要的事）。
+
+**已应用的示例**：见 [[learning/cheatsheet]] — 覆盖方法选择决策表、阶段路由、关键阈值、Tells & Smells、适用边界。
+
+---
+
+#### 增强三：对话式查询 wiki 时的 Discovery Loop Tax 意识
+
+**背景**：book-to-skill 测量了让 LLM agent 实时读 PDF 回答问题的成本：一本 256K token 的书，每次问答消耗约 77K tokens（discovery loop 方式）；而预结构化的 skill 只需约 5K tokens（24-51倍差距）。
+
+**本流程的现状**：wiki/ 是静态文件，通过 Obsidian 阅读，不存在 discovery loop 问题。
+
+**什么时候需要注意**：如果未来实现「用 Claude Code 对话查询 wiki」的 agent（如 `/content-extract query 什么是仓位管理`），不要直接把整个 INDEX.md + 所有 concepts/ 文件塞进上下文。正确做法：
+
+```
+查询时的上下文策略：
+1. 先加载领域 INDEX.md（~2K token），定位相关概念名
+2. 按需加载对应的 concepts/CONCEPT.md（~1K token）
+3. 如需决策辅助，加载 cheatsheet.md（~1.5K token）
+总计约 4-5K token，而非全量加载 wiki/ 所有文件（>50K token）
+```
+
+这与 wiki/ 的分层目录结构（INDEX → concepts/ → cheatsheet）完全对应，设计天然支持按需加载，无需改造。
+
+---
 
 当你有同一主题的多本书时：
 
